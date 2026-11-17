@@ -1,0 +1,34 @@
+{
+  "name": "job-finder",
+  "private": true,
+  "description": "Cloudflare Worker that watches AMR, Falck and fire-department job boards for EMT-B openings near Benicia and alerts by email/push.",
+  "type": "module",
+  "scripts": {
+    "dev": "alchemy dev",
+    "plan": "alchemy plan --stage prod",
+    "deploy": "alchemy deploy --stage prod",
+    "destroy": "alchemy destroy --stage prod",
+    "scan": "bun scripts/check.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "check": "tsc --noEmit && oxlint && oxfmt --check && bun test",
+    "check:fix": "oxlint --fix && oxfmt && tsc --noEmit && bun test"
+  },
+  "dependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.87",
+    "@effect/platform-bun": "^4.1.4",
+    "@effect/platform-node": "^4.1.4",
+    "alchemy": "2.0.0-beta.87",
+    "effect": "^4.1.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261117.1",
+    "@types/bun": "^1.4.4",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "bun@1.4.0"
+}
