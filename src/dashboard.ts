@@ -73,7 +73,7 @@ const jobCard = (j: JobRow, now: number, size: "lg" | "sm") => {
     <p class="who">${esc([j.employer, j.location !== j.employer && j.location].filter(Boolean).join(" · "))}</p>
     <p class="meta">${esc([j.detail, `found ${ago(j.first_seen, now)}`, `via ${j.source}`].filter(Boolean).join("  ·  "))}</p>
   </div>
-  ${gone ? "" : `<a class="apply" href="${esc(j.url)}" target="_blank" rel="noopener">Apply<span aria-hidden="true"> →</span></a>`}
+  ${gone ? "" : `<a class="apply" href="${esc(j.url)}" target="_blank" rel="noopener">Apply<span aria-hidden="true"> ↗</span></a>`}
 </article>`;
 };
 
@@ -165,66 +165,67 @@ h1 em{font-style:normal;color:var(--red)}
 .pill.bad .dot{background:var(--red);box-shadow:0 0 0 0 var(--red)}
 @keyframes pulse{70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
 @media (prefers-reduced-motion:reduce){.dot{animation:none}}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 30px}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
-.stat .num{font:650 30px/1 Fraunces,Georgia,serif}
-.stat.primary{border-color:var(--red);box-shadow:inset 3px 0 0 var(--red)}
+/* Stats: a ruled row of figures, no boxes. */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);margin:0 0 36px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.stat{padding:14px 16px 12px;border-left:1px solid var(--line)}
+.stat:first-child{border-left:0;padding-left:0}
+.stat .num{font:600 34px/1 Fraunces,Georgia,serif;letter-spacing:-.02em}
 .stat.primary .num{color:var(--red)}
-.stat .label{display:block;margin-top:6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-section{margin:0 0 34px}
-.sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
-h2{font:650 24px/1.1 Fraunces,Georgia,serif;margin:0;letter-spacing:-.01em}
-.kicker{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.list{display:grid;gap:10px}
-.job,.ann{display:flex;gap:16px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
-.job.lg{border-left:4px solid var(--red);padding:18px 20px}
-.job.sm{padding:12px 16px}
-.job.gone{opacity:.55;border-left-color:var(--line)}
+.stat .label{display:block;margin-top:8px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+/* Sections: a heavy rule under the heading, hairlines between rows. */
+section{margin:0 0 40px}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;border-bottom:2px solid var(--ink);padding-bottom:8px}
+h2{font:600 26px/1.1 Fraunces,Georgia,serif;margin:0;letter-spacing:-.015em}
+.kicker{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.list{display:block}
+.job,.ann{display:flex;gap:20px;align-items:baseline;padding:16px 0;border-bottom:1px solid var(--line)}
+.job.lg{padding:20px 0}
+.job.gone,.ann.expired{opacity:.5}
 .job-main,.ann-body{flex:1;min-width:0}
-.job-top{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
-.tag,.new,.closed,.state{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:5px}
-.tag.emt{background:var(--red-soft);color:var(--red)}
-.tag.ff{background:var(--ff-soft);color:var(--ff)}
-.new{background:var(--red);color:#fff}
-.closed,.state{border:1px solid var(--line);color:var(--muted)}
-.state.watching{border-color:var(--red);color:var(--red)}
-.state.confirmed{border-color:var(--ok);color:var(--ok)}
-h3{font:600 17px/1.3 Inter,system-ui,sans-serif;margin:0 0 2px}
-.job.lg h3{font:650 21px/1.2 Fraunces,Georgia,serif}
+.job-top{display:flex;gap:12px;align-items:center;margin-bottom:5px}
+.tag,.new,.closed,.state{font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.tag.emt{color:var(--red)}
+.tag.ff{color:var(--ff)}
+.new{color:var(--red);display:inline-flex;align-items:center;gap:5px}
+.new::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--red)}
+.closed,.state{color:var(--muted)}
+.state.watching{color:var(--red)}
+.state.confirmed{color:var(--ok)}
+h3{font:600 16px/1.35 Inter,system-ui,sans-serif;margin:0 0 3px}
+.job.lg h3{font:600 20px/1.25 Fraunces,Georgia,serif;letter-spacing:-.005em}
 h3 a{text-decoration:none}
-h3 a:hover{text-decoration:underline;text-decoration-color:var(--red);text-underline-offset:3px}
+h3 a:hover{text-decoration:underline;text-decoration-thickness:1px;text-decoration-color:var(--red);text-underline-offset:4px}
 .who{margin:0;color:var(--ink);overflow-wrap:anywhere}
-.meta{margin:4px 0 0;font-size:11.5px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
-.apply{flex:none;font-weight:600;font-size:14px;text-decoration:none;background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:10px}
-.apply:hover{background:var(--red);color:#fff}
-.job.sm .apply{padding:7px 12px;font-size:13px;background:transparent;color:var(--ink);border:1px solid var(--line)}
-.job.sm .apply:hover{border-color:var(--red);color:var(--red);background:transparent}
-.ann{align-items:stretch}
-.ann-when{flex:none;width:132px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--line);padding-right:16px}
-.ann-when .count{font:650 22px/1.1 Fraunces,Georgia,serif;color:var(--red)}
+.meta{margin:5px 0 0;font-size:11px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.apply{flex:none;font:500 11px "JetBrains Mono",monospace;letter-spacing:.12em;text-transform:uppercase;text-decoration:none;color:var(--ink);border-bottom:1px solid var(--ink);padding-bottom:2px}
+.job.lg .apply{color:var(--red);border-color:var(--red)}
+.apply:hover{color:var(--red);border-color:var(--red)}
+.ann-when{flex:none;width:140px}
+.ann-when .count{display:block;font:600 22px/1.1 Fraunces,Georgia,serif;color:var(--red)}
 .ann.confirmed .ann-when .count{color:var(--ok)}
-.ann.expired{opacity:.55}
-.sub{font-size:11px;color:var(--muted);margin-top:4px}
-.empty{background:var(--card);border:1px dashed var(--line);border-radius:14px;padding:18px;color:var(--muted);margin:0}
-details{margin:0 0 34px}
-summary{cursor:pointer;font:500 13px "JetBrains Mono",monospace;color:var(--muted);letter-spacing:.04em}
-details .list{margin-top:12px}
-.boards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
-.board{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
-.board .name{display:flex;align-items:center;gap:7px;font-weight:600}
-.board .dot{animation:none;width:7px;height:7px}
-.board.bad{border-color:var(--red)}
+.sub{display:block;font-size:10.5px;color:var(--muted);margin-top:4px}
+.empty{padding:18px 0;margin:0;color:var(--muted);border-bottom:1px solid var(--line);font-style:italic;font-family:Fraunces,Georgia,serif;font-size:16px}
+details{margin:-24px 0 40px}
+summary{cursor:pointer;padding:12px 0;font:500 11px "JetBrains Mono",monospace;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+details .list{border-top:1px solid var(--line)}
+/* Boards: a plain two-column index, a dot per board. */
+.boards{display:grid;grid-template-columns:repeat(2,1fr);column-gap:32px}
+.board{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.board .name{display:flex;align-items:center;gap:8px;font-weight:500}
+.board .dot{animation:none;width:6px;height:6px;flex:none}
 .board.bad .dot{background:var(--red)}
 .board.unknown .dot{background:var(--muted)}
-.board .meta{margin-top:3px}
+.board .meta{margin:0;text-align:right}
 .board .err{color:var(--red)}
-footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+footer{margin-top:40px;font-size:11px;color:var(--muted);font-family:"JetBrains Mono",monospace;letter-spacing:.04em}
 @media (max-width:640px){
   .stats{grid-template-columns:repeat(2,1fr)}
+  .stat:nth-child(3){border-left:0;padding-left:0}
+  .stat:nth-child(n+3){border-top:1px solid var(--line)}
   .sec-head .kicker{display:none}
-  .job,.ann{flex-direction:column;align-items:stretch}
-  .apply{text-align:center}
-  .ann-when{width:auto;border-right:0;border-bottom:1px solid var(--line);padding:0 0 10px}
+  .job,.ann{flex-direction:column;align-items:stretch;gap:10px}
+  .apply{align-self:flex-start}
+  .boards{grid-template-columns:1fr}
 }
 </style>
 </head>
