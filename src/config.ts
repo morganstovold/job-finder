@@ -43,8 +43,6 @@ export type SourceConfig = {
   | { kind: "smartrecruiters"; name: string; company: string; query: string }
   | { kind: "calopps"; name: string; keywords: string[] }
   | { kind: "neogovAgency"; name: string; agency: string }
-  | { kind: "fctc"; name: string }
-  | { kind: "listPage"; name: string; employer: string; url: string; start: string; end: string; applyUrl?: string }
 );
 
 /**
@@ -55,8 +53,6 @@ export type SourceConfig = {
 const FIRE_AGENCIES: Record<string, string> = {
   saccity: "Sac City Fire",
   smfd: "Sac Metro Fire",
-  cosumnescsd: "Cosumnes Fire",
-  confire: "ConFire",
   srvfire: "San Ramon Valley Fire",
   mofd: "Moraga-Orinda Fire",
   paloaltoca: "Palo Alto Fire",
@@ -77,8 +73,10 @@ export const SOURCES: SourceConfig[] = [
   {
     kind: "neogov",
     name: "GovernmentJobs",
-    keywords: ["EMT", "emergency medical technician", "single role"],
+    // The agency pages below are the fast path; this search is the wide net, so every 5 min.
+    keywords: ["EMT", "emergency medical technician"],
     distanceMiles: 75,
+    everyMinutes: 5,
   },
   // SFFD posts H-3 EMT/Paramedic through the City of SF's SmartRecruiters.
   {
@@ -91,17 +89,4 @@ export const SOURCES: SourceConfig[] = [
   // Also rate-limits occasionally. One keyword: CalOpps' "EMT" search also matches the spelled-out title.
   { kind: "calopps", name: "CalOpps", keywords: ["EMT"], everyMinutes: 5 },
   ...Object.entries(FIRE_AGENCIES).map(([agency, name]) => ({ kind: "neogovAgency" as const, name, agency })),
-  // Fire departments hiring off FCTC's Statewide Eligibility List (Sac City pulls single-role EMTs from it).
-  { kind: "fctc", name: "FCTC", everyMinutes: 5 },
-  // Medic Ambulance (Solano 911, Sonoma, Sacramento) lists open roles as plain text; alerts when EMT (re)appears.
-  {
-    kind: "listPage",
-    name: "Medic Ambulance",
-    employer: "Medic Ambulance",
-    url: "https://www.medicambulance.net/open-positions",
-    start: "Open Positions:",
-    end: "Apply Now",
-    applyUrl: "https://medicambulance.formstack.com/forms/medic_employment_application",
-    everyMinutes: 5,
-  },
 ];

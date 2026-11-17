@@ -57,7 +57,6 @@ globalThis.fetch = (async (input: string) => {
   }
   if (url.includes("calopps")) hit("calopps");
   if (url.includes("smartrecruiters")) return Response.json({ content: [] });
-  if (url.includes("medicambulance")) return new Response("<p>Open Positions:</p><p>Paramedic</p><p>Apply Now</p>");
   return new Response("");
 }) as any;
 

@@ -8,16 +8,14 @@ A Cloudflare Worker that checks EMT job boards every minute and alerts you the m
 911 employers and fire agencies only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic,
 NorCal, LIFEwest, AlphaOne, West Coast Medical) are deliberately left out.
 
-| Board                           | Covers                                                                                       | How                                                        |
-| ------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `careers.gmr.net` (iCIMS)       | AMR, CrowdRx, other GMR brands                                                               | JSON API, filtered by coordinates (60 mi)                  |
-| `falcknc.employ.onshift.com`    | Falck Northern California (Alameda 911)                                                      | OnShift JSON API                                           |
-| governmentjobs.com search       | Any fire district or city within 75 mi                                                       | site-wide search                                           |
-| governmentjobs.com agency pages | Sac City Fire, Sac Metro Fire, Cosumnes, ConFire, San Ramon Valley, Moraga-Orinda, Palo Alto | each agency's own board, newest first (faster than search) |
-| SmartRecruiters                 | City of SF, including SFFD H-3 EMT/Paramedic                                                 | public JSON API                                            |
-| CalOpps                         | Small agencies (Benicia, Pacifica, San Bruno…)                                               | search page, filtered by place names                       |
-| FCTC "Now Hiring"               | Fire departments recruiting off FCTC's Statewide Eligibility List                            | public page                                                |
-| Medic Ambulance                 | Solano 911 (plus Sonoma, Sacramento)                                                         | its "Open Positions" list; alerts when a role appears      |
+| Board                           | Covers                                                                    | How                                                  |
+| ------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `careers.gmr.net` (iCIMS)       | AMR, CrowdRx, other GMR brands                                            | JSON API, filtered by coordinates (60 mi)            |
+| `falcknc.employ.onshift.com`    | Falck Northern California (Alameda 911)                                   | OnShift JSON API                                     |
+| governmentjobs.com agency pages | Sac City Fire, Sac Metro Fire, San Ramon Valley, Moraga-Orinda, Palo Alto | each agency's own board, newest first: the fast path |
+| governmentjobs.com search       | Any fire district or city within 75 mi                                    | site-wide search: the wide net, every 5 min          |
+| SmartRecruiters                 | City of SF, including SFFD H-3 EMT/Paramedic                              | public JSON API                                      |
+| CalOpps                         | Small agencies (Benicia, Pacifica, San Bruno…)                            | search page, filtered by place names                 |
 
 Not covered: **King-American** (SF 911). Its Paycom job board only serves listings to a browser
 session, so subscribe with the **Create Job Alerts** button on
@@ -25,15 +23,15 @@ session, so subscribe with the **Create Job Alerts** button on
 
 Only titles that look like EMT-B jobs count. That excludes paramedic-only jobs, AEMT, instructor and
 faculty roles, interns, IFT/interfacility postings, and Firefighter/EMT unless the title says
-single-role or non-safety. Tune
-this in [`src/config.ts`](src/config.ts) and check it with `bun test`.
+single-role or non-safety. Tune this in [`src/config.ts`](src/config.ts) and check it with `bun test`.
 
 Postings can close fast (Sac City Fire's single-role EMT closed 14 minutes after opening at 250
-applicants; AMR in about 45), so AMR/GMR, GovernmentJobs, the fire agency pages and SF are checked every minute. Falck
-and CalOpps rate-limit, so they get every 5 minutes (as do FCTC and Medic) (`everyMinutes` in `src/config.ts`). A board
-that fails backs off from its own pace (1, 2, 4… min; 5, 10, 20… for 5-minute boards, max 60) and
-returns to normal after one success. D1 is only written when something changes, about 2,200 rows a
-day against the free tier's 100k.
+applicants; AMR in about 45), so AMR/GMR, the fire agency pages and SF are checked every minute.
+Falck and CalOpps rate-limit, and the site-wide GovernmentJobs search is only the backup net, so
+those get every 5 minutes (`everyMinutes` in `src/config.ts`). A board that fails backs off from its
+own pace (1, 2, 4… min; 5, 10, 20… for 5-minute boards, max 60) and returns to normal after one
+success. D1 is only written when something changes, about 1,600 rows a day against the free tier's
+100k.
 
 Each job alerts **once**, the first time it's seen (tracked in D1). The first run after deploying
 emails everything currently open. If a board fails for 6+ hours (usually because the site changed),

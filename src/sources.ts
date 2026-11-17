@@ -196,54 +196,6 @@ async function neogovAgency(src: Extract<SourceConfig, { kind: "neogovAgency" }>
   return jobs;
 }
 
-// ── FCTC "Now Hiring" (fire departments recruiting off the Statewide Eligibility List) ──
-// A hand-edited table: each cell is "<Department><br><Position>", sometimes linked.
-async function fctc(src: Extract<SourceConfig, { kind: "fctc" }>): Promise<Job[]> {
-  const page = "https://www.fctconline.org/find-a-job/now-hiring/";
-  const html = await (await get(page)).text();
-  const jobs: Job[] = [];
-  for (const [, cell] of html.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)) {
-    if (/<h3/i.test(cell)) continue; // section headers ("FILING DEADLINES", "CONTINUOUS"…)
-    const href = cell.match(/<a[^>]+href="([^"]+)"/)?.[1];
-    const lines = cell
-      .split(/<br\s*\/?>/i)
-      .map((l) => decode(l.replace(/<[^>]+>/g, "")))
-      .filter(Boolean);
-    if (lines.length < 2) continue;
-    const [employer, ...rest] = lines;
-    const title = rest.join(" ");
-    if (!isNearbyText(employer)) continue;
-    jobs.push({
-      id: `fctc:${employer}:${title}`.toLowerCase(),
-      source: src.name,
-      title,
-      employer,
-      location: "",
-      url: href ? new URL(decode(href), page).toString() : page,
-    });
-  }
-  return dedupe(jobs);
-}
-
-// ── A plain "we're hiring for:" list on an employer's own site (e.g. Medic Ambulance) ──
-// Each listed role becomes a job; you're alerted when a role appears that wasn't listed before.
-async function listPage(src: Extract<SourceConfig, { kind: "listPage" }>): Promise<Job[]> {
-  const html = await (await get(src.url)).text();
-  const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, "\n");
-  const lines = text.split("\n").map(decode).filter(Boolean);
-  const start = lines.findIndex((l) => l.startsWith(src.start));
-  if (start < 0) throw new Error(`"${src.start}" not found on ${src.url}`);
-  const end = lines.findIndex((l, i) => i > start && l.startsWith(src.end));
-  return lines.slice(start + 1, end < 0 ? undefined : end).map((title) => ({
-    id: `list:${src.url}:${title}`.toLowerCase(),
-    source: src.name,
-    title,
-    employer: src.employer,
-    location: "",
-    url: src.applyUrl ?? src.url,
-  }));
-}
-
 export const fetchSource = (src: SourceConfig): Promise<Job[]> => {
   switch (src.kind) {
     case "gmr":
@@ -258,9 +210,5 @@ export const fetchSource = (src: SourceConfig): Promise<Job[]> => {
       return calopps(src);
     case "neogovAgency":
       return neogovAgency(src);
-    case "fctc":
-      return fctc(src);
-    case "listPage":
-      return listPage(src);
   }
 };
