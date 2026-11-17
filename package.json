@@ -21,7 +21,9 @@
     "@effect/platform-bun": "^4.1.4",
     "@effect/platform-node": "^4.1.4",
     "alchemy": "2.0.0-beta.87",
-    "effect": "^4.1.4"
+    "chrono-node": "^2.10.3",
+    "effect": "^4.1.4",
+    "postal-mime": "^4.2.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261117.1",

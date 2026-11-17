@@ -5,6 +5,8 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
 const DOMAIN = "jobs.stovold.dev";
+/** Inbound address for agency interest-list emails ("applications open 11/16 at 12:01 AM"). */
+const ANNOUNCE_ADDRESS = "announce@stovold.dev";
 
 /**
  * Every outbound alert goes through `notify` (retried with backoff); messages that exhaust their
@@ -25,7 +27,7 @@ export const Worker = Cloudflare.Worker(
     const isProd = (yield* Alchemy.Stage) === "prod";
     const { queue, dlq } = yield* NotifyQueues;
     return {
-      main: "./src/worker.ts",
+      main: "./src/index.ts",
       domain: isProd ? DOMAIN : undefined,
       // Every minute: postings can close within 15 minutes. Each board's own pace is in src/config.ts.
       crons: ["* * * * *"],
@@ -33,6 +35,12 @@ export const Worker = Cloudflare.Worker(
         DB: Cloudflare.D1.Database("JobsDb", { migrations: "./migrations" }),
         NOTIFY: queue,
         NOTIFY_DLQ_NAME: dlq.queueName,
+        // One durable instance per announcement email: reminders before it opens, then waits for the posting.
+        ANNOUNCE_WF: Cloudflare.Workflow<{ announcementId: number }>("AnnouncementWorkflow", {
+          className: "AnnouncementWorkflow",
+        }),
+        // Test flag: reminder offsets in minutes before opening ("1440,60" = 24h and 1h).
+        REMINDER_OFFSETS_MIN: Config.String("REMINDER_OFFSETS_MIN").pipe(Config.withDefault("1440,60")),
         // Cloudflare Email Routing send_email binding - free; the recipient must be a
         // verified destination address on the account.
         EMAIL: Cloudflare.Email.SendEmail("Email"),
@@ -71,6 +79,15 @@ export default Alchemy.Stack(
       scriptName: worker.workerName,
       settings: { batchSize: 10, maxWaitTimeMs: 1000, maxRetries: 2 },
     });
+    if ((yield* Alchemy.Stage) === "prod") {
+      // announce@stovold.dev -> this Worker's email() handler.
+      yield* Cloudflare.Email.Rule("AnnounceRoute", {
+        zone: "stovold.dev",
+        name: "EMT Job Watch announcements",
+        matchers: [{ type: "literal", field: "to", value: ANNOUNCE_ADDRESS }],
+        actions: [{ type: "worker", value: [worker.workerName] }],
+      });
+    }
     return { url: worker.url };
   }),
 );

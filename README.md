@@ -39,6 +39,30 @@ you get one "scraper broken" alert. AMR and the fire agency pages always have li
 suddenly returns none, that counts as a failure too (a broken parser looks like an empty board). It
 still gets checked every minute, since the board might really be empty.
 
+### Announcement emails (the early warning)
+
+Sac Fire emails its interest list _before_ a posting exists ("single-role EMT applications open
+11/16 at 12:01 AM"), sometimes months ahead. The scraper can't see a posting that isn't up yet, so
+those emails go to **`announce@stovold.dev`**, which Email Routing hands to this Worker:
+
+1. The email is always forwarded to `NOTIFY_EMAIL` first (so you see "confirm your subscription"
+   links, and nothing is lost if parsing fails).
+2. If the sender is in `ANNOUNCERS` (`src/config.ts`) and it's about an EMT / single-role / EMS
+   trainee opening, it's stored in D1 (`announcements`) with the opening date/time if one is stated
+   (read as Pacific time; a date with no time counts as midnight).
+3. You get a push right away: "Sac City Fire: single-role EMT opening announced - opens Mon 11/16
+   12:01 AM" (or "date not stated").
+4. That agency's boards are checked immediately, in case the posting is already live.
+5. A durable Cloudflare Workflow per announcement then sleeps until **24h before** opening (push,
+   priority 1) and **1h before** (push, priority 2), and waits for the posting. When the per-minute
+   scraper finds a new job on that agency's board, it's alerted as **"OPEN NOW -"** at priority 2 and
+   the announcement is marked confirmed. With no date stated it's watched for 270 days; otherwise
+   until 30 days after opening.
+
+Active announcements show at the top of the dashboard. To add another agency's list, add an entry to
+`ANNOUNCERS` with its sender pattern and the `SOURCES` names to watch. `REMINDER_OFFSETS_MIN`
+(default `1440,60`) shortens the reminders for testing, e.g. `90,30`.
+
 ### Alert priority and delivery
 
 Each board has a Pushover `priority` in `src/config.ts`: **2 (emergency, repeats every 30s until
@@ -61,14 +85,19 @@ key is recorded in D1 (`sent`) and repeats are skipped.
    after a 30-day trial) and log in. Copy your **user key** from the Pushover dashboard, then create an
    application ("Create an Application/API Token") and copy its **API token**. Each alert links to the
    job's apply page, with a Dashboard link in the message. Alert priority is set per board (see above).
-3. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `PUSHOVER_USER`, `PUSHOVER_TOKEN`, and `ADMIN_KEY`.
-4. Deploy:
+3. **Announcements.** Deploying creates the `announce@stovold.dev` → Worker routing rule (prod only).
+   Sign up for Sac Fire's hiring alerts (on its
+   [single-role EMT page](https://www.cityofsacramento.gov/fire/join-sacramento-fire/career-paths/ems-single-role))
+   with `announce@stovold.dev`, then click the confirmation link in the forwarded email. When the
+   first real announcement arrives, check its sender and tighten `from` in `ANNOUNCERS` if needed.
+4. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `PUSHOVER_USER`, `PUSHOVER_TOKEN`, and `ADMIN_KEY`.
+5. Deploy:
 
    ```bash
    bun run deploy
    ```
 
-5. Test: visit `https://jobs.stovold.dev/test?key=<ADMIN_KEY>` to send a test alert through the
+6. Test: visit `https://jobs.stovold.dev/test?key=<ADMIN_KEY>` to send a test alert through the
    queue (add `&priority=2` to try an emergency push), or
    `/run?key=<ADMIN_KEY>` to run a check now. `/` is a small dashboard of recent matches and
    board health.

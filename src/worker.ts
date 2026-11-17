@@ -1,6 +1,8 @@
 import type { WorkerEnv } from "../alchemy.run.ts";
+import { reminderOffsets } from "./announce-watch.ts";
+import { fmtPT, handleAnnouncementEmail } from "./announce.ts";
 import { HOME, SOURCES } from "./config.ts";
-import { isMatch } from "./filter.ts";
+import { type AnnouncementRow, claimAndNotify, TOUCH_EVERY_MS } from "./jobs.ts";
 import { enqueue, handleNotifyBatch, jobMessages, type NotifyMessage } from "./notify.ts";
 import { fetchSource } from "./sources.ts";
 import type { Job } from "./types.ts";
@@ -18,13 +20,6 @@ export const backoffMs = (failures: number, everyMinutes = 1) =>
 
 /** Cron ticks drift by a few seconds; a board due within this window counts as due now. */
 const TICK_SLACK_MS = 15_000;
-
-/**
- * D1's free tier counts rows written (INSERT and UPDATE alike), so at one run a minute we only write
- * when something changed: new jobs, failures/recoveries, and a refresh of "still listed" / "board ok"
- * timestamps at most this often.
- */
-const TOUCH_EVERY_MS = 10 * 60_000;
 
 /**
  * Is this board due? A failing board waits out its backoff (`next_attempt`). A healthy board runs on
@@ -58,7 +53,7 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   const sources = SOURCES.filter((s) => manual || isDue(s.everyMinutes ?? 1, status.get(s.name), now));
   const results = await Promise.allSettled(sources.map(fetchSource));
 
-  const matches: Job[] = [];
+  const fetched: Job[] = [];
   const statusWrites: D1PreparedStatement[] = [];
   const broken: string[] = [];
 
@@ -69,7 +64,7 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
     const emptied = r.status === "fulfilled" && expectNonEmpty && r.value.length === 0 && (prev?.last_count ?? 0) > 0;
 
     if (r.status === "fulfilled" && !emptied) {
-      matches.push(...r.value.filter(isMatch));
+      fetched.push(...r.value);
       // Skip the write when nothing changed: healthy before, same listing count, refreshed recently.
       const changed =
         !prev?.last_ok ||
@@ -113,32 +108,14 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
       );
   }
 
-  // The same posting can show up on two boards (e.g. SFFD on SmartRecruiters + CalOpps) - those have
-  // different ids, which is fine: you'd rather hear twice than miss one.
-  const unique = [...new Map(matches.map((j) => [j.id, j])).values()];
+  // D1's free tier counts rows written (INSERT and UPDATE alike), so board status is only written
+  // when something changed; it rides in the same batch as the job claims.
+  const { unique, fresh } = await claimAndNotify(env, fetched, now, statusWrites);
 
-  // Claim new jobs atomically: INSERT … DO NOTHING RETURNING only returns a row to the run that actually
-  // inserted it, so two overlapping runs (a slow board at one run a minute) can't both alert the same job.
-  const claim = env.DB.prepare(
-    `INSERT INTO jobs (id, source, title, employer, location, url, posted_at, detail, first_seen, last_seen)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
-     ON CONFLICT (id) DO NOTHING RETURNING id`,
-  );
-  const touch = env.DB.prepare(`UPDATE jobs SET last_seen = ?2, title = ?3, url = ?4 WHERE id = ?1 AND last_seen < ?5`);
-  const batch = await env.DB.batch([
-    ...unique.map((j) =>
-      claim.bind(j.id, j.source, j.title, j.employer, j.location, j.url, j.postedAt ?? null, j.detail ?? null, now),
-    ),
-    ...unique.map((j) => touch.bind(j.id, now, j.title, j.url, now - TOUCH_EVERY_MS)),
-    ...statusWrites,
-  ]);
-  const fresh = unique.filter((_, i) => (batch[i]?.results?.length ?? 0) > 0);
-
-  const messages: NotifyMessage[] = jobMessages(fresh);
   if (broken.length) {
     const body = `These job boards have been failing for 6+ hours - the scraper probably needs a fix:\n\n${broken.join("\n")}`;
     const dedupeKey = `broken:${broken.map((b) => b.split(":")[0]).join("|")}:${new Date(now).toISOString().slice(0, 13)}`;
-    messages.push(
+    await enqueue(env, [
       {
         kind: "email",
         title: "EMT Job Watch: a job board stopped working",
@@ -153,9 +130,8 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
         priority: 1,
         dedupeKey: `${dedupeKey}:push`,
       },
-    );
+    ]);
   }
-  await enqueue(env, messages);
 
   const summary = { matches: unique.length, new: fresh.map((j) => `${j.employer}: ${j.title}`), broken };
   console.log(JSON.stringify(summary));
@@ -168,24 +144,44 @@ const ago = (t?: number | null) => (t ? `${Math.round((Date.now() - t) / 60000)}
 
 async function dashboard(env: WorkerEnv) {
   const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const [{ results: jobs }, { results: status }] = await Promise.all([
+  const [{ results: jobs }, { results: status }, { results: announcements }] = await Promise.all([
     env.DB.prepare(`SELECT * FROM jobs WHERE last_seen > ? ORDER BY first_seen DESC LIMIT 100`).bind(since).all<any>(),
     env.DB.prepare(`SELECT * FROM source_status ORDER BY source`).all<any>(),
+    env.DB.prepare(
+      `SELECT * FROM announcements WHERE status = 'watching' OR received_at > ? ORDER BY received_at DESC LIMIT 10`,
+    )
+      .bind(since)
+      .all<AnnouncementRow>(),
   ]);
+  const { dayMs, hourMs } = reminderOffsets(env);
+  const nextReminder = (a: AnnouncementRow) => {
+    if (a.status !== "watching" || !a.open_at) return "";
+    if (!a.reminded_24h && a.open_at - dayMs > a.received_at) return ` · reminder ${fmtPT(a.open_at - dayMs)}`;
+    if (!a.reminded_1h) return ` · reminder ${fmtPT(a.open_at - hourMs)}`;
+    return "";
+  };
+  const announcementsHtml = announcements.length
+    ? `<h2>Announcements</h2>${announcements
+        .map(
+          (a) => `<div class=j><b>${esc(a.announcer)}</b> - ${esc(a.subject)}
+<div class=m>${a.status === "watching" ? "👀 watching" : a.status === "confirmed" ? "✅ posting found" : "⌛ expired"} · ${a.open_at ? `opens ${fmtPT(a.open_at)}` : "date not stated"}${nextReminder(a)} · received ${fmtPT(a.received_at)}</div></div>`,
+        )
+        .join("")}<h2>Jobs</h2>`
+    : "";
   const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>EMT Job Watch</title>
 <style>body{font:15px system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;color:#111;background:#fff}
 @media(prefers-color-scheme:dark){body{color:#eee;background:#111}a{color:#8ab4ff}}
 .j{padding:10px 0;border-top:1px solid #8884}.m{color:#888;font-size:13px}.gone{opacity:.45}</style>
 <h1>EMT Job Watch</h1><p class=m>EMT-B jobs within ${HOME.radiusMiles} mi of ${HOME.label}. Faded = no longer listed.</p>
-${
-  jobs
-    .map(
-      (j: any) => `<div class="j ${Date.now() - j.last_seen > 60 * 60 * 1000 ? "gone" : ""}">
+${announcementsHtml}${
+    jobs
+      .map(
+        (j: any) => `<div class="j ${Date.now() - j.last_seen > 60 * 60 * 1000 ? "gone" : ""}">
 <a href="${esc(j.url)}"><b>${esc(j.title)}</b></a><br>${esc([j.employer, j.location].filter(Boolean).join(" - "))}
 <div class=m>${esc([j.detail, `found ${new Date(j.first_seen).toLocaleString("en-US", { timeZone: "America/Los_Angeles" })}`, j.source].filter(Boolean).join(" · "))}</div></div>`,
-    )
-    .join("") || "<p>No matches yet.</p>"
-}
+      )
+      .join("") || "<p>No matches yet.</p>"
+  }
 <h2>Boards</h2>${status
     .map(
       (s: any) =>
@@ -233,5 +229,11 @@ export default {
 
   async queue(batch: MessageBatch<NotifyMessage>, env: WorkerEnv): Promise<void> {
     await handleNotifyBatch(batch, env);
+  },
+
+  // announce@stovold.dev: agency interest-list emails, the early warning before a posting exists.
+  async email(message: ForwardableEmailMessage, env: WorkerEnv): Promise<void> {
+    const result = await handleAnnouncementEmail(message, env);
+    console.log(`announce@ from ${message.from}: ${JSON.stringify(result)}`);
   },
 };

@@ -113,3 +113,24 @@ export const SOURCES: SourceConfig[] = [
     expectNonEmpty: true,
   })),
 ];
+
+/**
+ * Agencies whose interest-list emails are forwarded to announce@stovold.dev. An announcement from one
+ * of these is stored and watched: reminders before it opens, and an "OPEN NOW" emergency push when
+ * one of its `sources` (SOURCES names) shows the posting. Adding another agency's list = one entry.
+ */
+export interface Announcer {
+  name: string;
+  /** Matched against the sender address. */
+  from: RegExp;
+  sources: string[];
+}
+
+export const ANNOUNCERS: Announcer[] = [
+  {
+    name: "Sac City Fire",
+    // TODO: check against a real Sac Fire email and tighten.
+    from: /@cityofsacramento\.(org|gov)$|sacfire/i,
+    sources: ["Sac City Fire"],
+  },
+];
