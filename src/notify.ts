@@ -41,7 +41,11 @@ export async function sendPush(env: WorkerEnv, title: string, message: string, u
     ...(PUSH_PRIORITY === 2 ? { retry: "30", expire: "3600" } : {}),
     ...(link ? { url: link.slice(0, 512), url_title: url ? urlTitle : "Dashboard" } : {}),
   });
-  const res = await fetch("https://api.pushover.net/1/messages.json", { method: "POST", body });
+  const res = await fetch("https://api.pushover.net/1/messages.json", {
+    method: "POST",
+    body,
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!res.ok) throw new Error(`pushover ${res.status}: ${await res.text()}`);
 }
 

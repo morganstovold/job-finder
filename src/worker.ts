@@ -9,15 +9,36 @@ import type { Job } from "./types.ts";
 const BROKEN_AFTER_MS = 6 * 60 * 60 * 1000;
 
 /**
- * Exponential backoff after consecutive failures (e.g. a board rate-limiting us with 403s):
- * 1 failure → retry next tick (10 min), 2 → 20, 3 → 40, 4+ → 60. One success resets it.
+ * Exponential backoff after consecutive failures (e.g. a board rate-limiting us with 403s), scaled from
+ * the board's own pace: every-minute boards retry after 1, 2, 4, 8… min; a 5-minute board after
+ * 5, 10, 20, 40 min. Capped at 60. One success resets it.
  */
-export const backoffMs = (failures: number) => Math.min(10 * 2 ** (failures - 1), 60) * 60_000;
+export const backoffMs = (failures: number, everyMinutes = 1) =>
+  Math.min(everyMinutes * 2 ** (failures - 1), 60) * 60_000;
+
+/** Cron ticks drift by a few seconds; a board due within this window counts as due now. */
+const TICK_SLACK_MS = 15_000;
+
+/**
+ * D1's free tier counts rows written (INSERT and UPDATE alike), so at one run a minute we only write
+ * when something changed: new jobs, failures/recoveries, and a refresh of "still listed" / "board ok"
+ * timestamps at most this often.
+ */
+const TOUCH_EVERY_MS = 10 * 60_000;
+
+/**
+ * Is this board due? A failing board waits out its backoff (`next_attempt`). A healthy board runs on
+ * its pace by the clock - every tick for 1-minute boards, ticks on :00/:05/:10… for 5-minute ones -
+ * so pacing needs no stored state (and no writes).
+ */
+const isDue = (everyMinutes: number, s: Status | undefined, now: number) =>
+  s?.failures ? (s.next_attempt ?? 0) <= now + TICK_SLACK_MS : Math.round(now / 60_000) % everyMinutes === 0;
 
 type Status = {
   source: string;
   last_ok: number | null;
   alerted: number;
+  last_count: number | null;
   failures: number;
   next_attempt: number | null;
 };
@@ -26,11 +47,13 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   const now = Date.now();
   const status = new Map(
     (
-      await env.DB.prepare(`SELECT source, last_ok, alerted, failures, next_attempt FROM source_status`).all<Status>()
+      await env.DB.prepare(
+        `SELECT source, last_ok, last_count, alerted, failures, next_attempt FROM source_status`,
+      ).all<Status>()
     ).results.map((s) => [s.source, s]),
   );
-  // Cron ticks land a few seconds early or late, so allow a minute of slack. Manual /run checks everything.
-  const sources = SOURCES.filter((s) => manual || (status.get(s.name)?.next_attempt ?? 0) <= now + 60_000);
+  // Manual /run checks everything; cron runs only boards whose pace or backoff says they're due.
+  const sources = SOURCES.filter((s) => manual || isDue(s.everyMinutes ?? 1, status.get(s.name), now));
   const results = await Promise.allSettled(sources.map(fetchSource));
 
   const matches: Job[] = [];
@@ -38,23 +61,32 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   const broken: string[] = [];
 
   for (const [i, r] of results.entries()) {
-    const name = sources[i].name;
+    const { name, everyMinutes = 1 } = sources[i];
     if (r.status === "fulfilled") {
       matches.push(...r.value.filter(isMatch));
-      statusWrites.push(
-        env.DB.prepare(
-          `INSERT INTO source_status (source, last_ok, last_count, alerted, failures, next_attempt)
-           VALUES (?1, ?2, ?3, 0, 0, NULL)
-           ON CONFLICT (source) DO UPDATE SET last_ok = ?2, last_count = ?3, alerted = 0, failures = 0, next_attempt = NULL`,
-        ).bind(name, now, r.value.length),
-      );
+      const prev = status.get(name);
+      // Skip the write when nothing changed: healthy before, same listing count, refreshed recently.
+      const changed =
+        !prev?.last_ok ||
+        prev.failures > 0 ||
+        prev.last_count !== r.value.length ||
+        now - prev.last_ok >= TOUCH_EVERY_MS;
+      if (changed)
+        statusWrites.push(
+          env.DB.prepare(
+            `INSERT INTO source_status (source, last_ok, last_count, alerted, failures, next_attempt)
+             VALUES (?1, ?2, ?3, 0, 0, NULL)
+             ON CONFLICT (source) DO UPDATE SET last_ok = ?2, last_count = ?3, alerted = 0, failures = 0, next_attempt = NULL`,
+          ).bind(name, now, r.value.length),
+        );
     } else {
       const msg = String(r.reason?.message ?? r.reason).slice(0, 500);
       const prev = status.get(name);
       const failures = (prev?.failures ?? 0) + 1;
-      const retryAt = now + backoffMs(failures);
-      console.error(`${name} failed (${failures}x, retry in ${backoffMs(failures) / 60_000} min): ${msg}`);
-      // ~6h of failures: measured from the last success, or by count (8 ≈ 6h of backoff) for a board that never worked.
+      const wait = backoffMs(failures, everyMinutes);
+      const retryAt = now + wait;
+      console.error(`${name} failed (${failures}x, retry in ${wait / 60_000} min): ${msg}`);
+      // ~6h of failures: measured from the last success, or by count (8 = several hours of backoff) for a board that never worked.
       const longBroken = prev?.last_ok ? now - prev.last_ok > BROKEN_AFTER_MS : failures >= 8;
       const shouldAlert = !prev?.alerted && longBroken;
       if (shouldAlert) broken.push(`${name}: ${msg}`);
@@ -72,28 +104,23 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   // The same posting can show up on two boards (e.g. SFFD on SmartRecruiters + CalOpps) - those have
   // different ids, which is fine: you'd rather hear twice than miss one.
   const unique = [...new Map(matches.map((j) => [j.id, j])).values()];
-  const known = new Set(
-    unique.length
-      ? (
-          await env.DB.prepare(`SELECT id FROM jobs WHERE id IN (SELECT value FROM json_each(?))`)
-            .bind(JSON.stringify(unique.map((j) => j.id)))
-            .all<{ id: string }>()
-        ).results.map((r) => r.id)
-      : [],
-  );
-  const fresh = unique.filter((j) => !known.has(j.id));
 
-  const upsert = env.DB.prepare(
+  // Claim new jobs atomically: INSERT … DO NOTHING RETURNING only returns a row to the run that actually
+  // inserted it, so two overlapping runs (a slow board at one run a minute) can't both alert the same job.
+  const claim = env.DB.prepare(
     `INSERT INTO jobs (id, source, title, employer, location, url, posted_at, detail, first_seen, last_seen)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
-     ON CONFLICT (id) DO UPDATE SET last_seen = ?9, title = ?3, url = ?6`,
+     ON CONFLICT (id) DO NOTHING RETURNING id`,
   );
-  await env.DB.batch([
-    ...statusWrites,
+  const touch = env.DB.prepare(`UPDATE jobs SET last_seen = ?2, title = ?3, url = ?4 WHERE id = ?1 AND last_seen < ?5`);
+  const batch = await env.DB.batch([
     ...unique.map((j) =>
-      upsert.bind(j.id, j.source, j.title, j.employer, j.location, j.url, j.postedAt ?? null, j.detail ?? null, now),
+      claim.bind(j.id, j.source, j.title, j.employer, j.location, j.url, j.postedAt ?? null, j.detail ?? null, now),
     ),
+    ...unique.map((j) => touch.bind(j.id, now, j.title, j.url, now - TOUCH_EVERY_MS)),
+    ...statusWrites,
   ]);
+  const fresh = unique.filter((_, i) => (batch[i]?.results?.length ?? 0) > 0);
 
   if (fresh.length) await notifyNewJobs(env, fresh);
   if (broken.length) {

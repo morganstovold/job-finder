@@ -6,7 +6,8 @@ const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 
 const get = async (url: string, headers: Record<string, string> = {}) => {
-  const res = await fetch(url, { headers: { "User-Agent": UA, ...headers } });
+  // Time out so a hung board can't stall a run into the next minute's tick.
+  const res = await fetch(url, { headers: { "User-Agent": UA, ...headers }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${url}`);
   return res;
 };
@@ -115,7 +116,7 @@ async function neogov(src: Extract<SourceConfig, { kind: "neogov" }>): Promise<J
         const info = inner.match(/<div class="primaryInfo">\s*([^<]*\|[^<]*)<\/div>/)?.[1];
         if (!a.id || !href) continue;
         jobs.push({
-          id: `neogov:${a.id}`,
+          id: `neogov:${a.id.replace(/-0$/, "")}`,
           source: src.name,
           title: a.title,
           employer: a.employer,
@@ -167,6 +168,82 @@ async function calopps(src: Extract<SourceConfig, { kind: "calopps" }>): Promise
   return dedupe(jobs);
 }
 
+// ── A single agency's governmentjobs.com page (newest first) ───────────────
+// Faster than the site-wide search, which can lag - matters when a posting closes in 14 minutes.
+async function neogovAgency(src: Extract<SourceConfig, { kind: "neogovAgency" }>): Promise<Job[]> {
+  const q = new URLSearchParams({ agency: src.agency, sort: "PostingDate", isDescendingSort: "true" });
+  const res = await get(`https://www.governmentjobs.com/careers/home/index?${q}`, {
+    "X-Requested-With": "XMLHttpRequest",
+  });
+  // An unknown agency slug redirects to the generic site instead of erroring.
+  if (res.redirected) throw new Error(`unknown agency ${src.agency}`);
+  const html = await res.text();
+  const jobs: Job[] = [];
+  for (const [, id, inner] of html.matchAll(/<li class="list-item" data-job-id="(\d+)">([\s\S]*?)<\/ul>/g)) {
+    const link = inner.match(/class="item-details-link"[^>]*href="([^"]+)"[^>]*>([^<]+)</);
+    if (!link) continue;
+    const meta = [...inner.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => decode(m[1])).filter(Boolean);
+    jobs.push({
+      id: `neogov:${id}`,
+      source: src.name,
+      title: decode(link[2]),
+      employer: src.name,
+      location: "",
+      url: `https://www.governmentjobs.com${decode(link[1])}`,
+      detail: meta.slice(1).join(" · ") || undefined,
+    });
+  }
+  return jobs;
+}
+
+// ── FCTC "Now Hiring" (fire departments recruiting off the Statewide Eligibility List) ──
+// A hand-edited table: each cell is "<Department><br><Position>", sometimes linked.
+async function fctc(src: Extract<SourceConfig, { kind: "fctc" }>): Promise<Job[]> {
+  const page = "https://www.fctconline.org/find-a-job/now-hiring/";
+  const html = await (await get(page)).text();
+  const jobs: Job[] = [];
+  for (const [, cell] of html.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)) {
+    if (/<h3/i.test(cell)) continue; // section headers ("FILING DEADLINES", "CONTINUOUS"…)
+    const href = cell.match(/<a[^>]+href="([^"]+)"/)?.[1];
+    const lines = cell
+      .split(/<br\s*\/?>/i)
+      .map((l) => decode(l.replace(/<[^>]+>/g, "")))
+      .filter(Boolean);
+    if (lines.length < 2) continue;
+    const [employer, ...rest] = lines;
+    const title = rest.join(" ");
+    if (!isNearbyText(employer)) continue;
+    jobs.push({
+      id: `fctc:${employer}:${title}`.toLowerCase(),
+      source: src.name,
+      title,
+      employer,
+      location: "",
+      url: href ? new URL(decode(href), page).toString() : page,
+    });
+  }
+  return dedupe(jobs);
+}
+
+// ── A plain "we're hiring for:" list on an employer's own site (e.g. Medic Ambulance) ──
+// Each listed role becomes a job; you're alerted when a role appears that wasn't listed before.
+async function listPage(src: Extract<SourceConfig, { kind: "listPage" }>): Promise<Job[]> {
+  const html = await (await get(src.url)).text();
+  const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, "\n");
+  const lines = text.split("\n").map(decode).filter(Boolean);
+  const start = lines.findIndex((l) => l.startsWith(src.start));
+  if (start < 0) throw new Error(`"${src.start}" not found on ${src.url}`);
+  const end = lines.findIndex((l, i) => i > start && l.startsWith(src.end));
+  return lines.slice(start + 1, end < 0 ? undefined : end).map((title) => ({
+    id: `list:${src.url}:${title}`.toLowerCase(),
+    source: src.name,
+    title,
+    employer: src.employer,
+    location: "",
+    url: src.applyUrl ?? src.url,
+  }));
+}
+
 export const fetchSource = (src: SourceConfig): Promise<Job[]> => {
   switch (src.kind) {
     case "gmr":
@@ -179,5 +256,11 @@ export const fetchSource = (src: SourceConfig): Promise<Job[]> => {
       return smartrecruiters(src);
     case "calopps":
       return calopps(src);
+    case "neogovAgency":
+      return neogovAgency(src);
+    case "fctc":
+      return fctc(src);
+    case "listPage":
+      return listPage(src);
   }
 };

@@ -14,8 +14,8 @@ export const Worker = Cloudflare.Worker(
     return {
       main: "./src/worker.ts",
       domain: isProd ? DOMAIN : undefined,
-      // Every 10 minutes - ~15 small requests per run across all boards.
-      crons: ["*/10 * * * *"],
+      // Every minute: postings can close within 15 minutes. Each board's own pace is in src/config.ts.
+      crons: ["* * * * *"],
       env: {
         DB: Cloudflare.D1.Database("JobsDb", { migrations: "./migrations" }),
         // Cloudflare Email Routing send_email binding - free; the recipient must be a

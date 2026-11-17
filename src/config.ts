@@ -22,25 +22,57 @@ export const TITLE_EXCLUDE: RegExp[] = [
   /instructor|faculty|professor|teacher|educat|coordinator|manager|director|supervisor|scheduler/i,
   /\bA-?EMT\b|advanced emt|emt-?a\b|emt-?p\b|emt-?i\b/i, // AEMT / paramedic-level
   /intern\b|internship|skillbridge|volunteer/i,
+  // 911 only: you already work IFT. Catches IFT postings at 911 companies (e.g. AMR "EMT - IFT").
+  /\bIFT\b|inter-?facility|non-?emergency|wheelchair|gurney/i,
 ];
 
 /** Firefighter/EMT titles are skipped unless they match this, e.g. "EMT (Non-Safety)". */
 export const FIREFIGHTER_OK = /single[- ]role|non[- ]safety/i;
 
-export type SourceConfig =
+export type SourceConfig = {
+  name: string;
+  /**
+   * Minimum minutes between checks (default 1 = every cron tick). Postings can close within
+   * 15-45 min of going up, so keep this low; boards that rate-limit get a little more room.
+   */
+  everyMinutes?: number;
+} & (
   | { kind: "gmr"; name: string; brands?: string[] }
   | { kind: "onshift"; name: string; tenant: string }
   | { kind: "neogov"; name: string; keywords: string[]; distanceMiles: number }
   | { kind: "smartrecruiters"; name: string; company: string; query: string }
-  | { kind: "calopps"; name: string; keywords: string[] };
+  | { kind: "calopps"; name: string; keywords: string[] }
+  | { kind: "neogovAgency"; name: string; agency: string }
+  | { kind: "fctc"; name: string }
+  | { kind: "listPage"; name: string; employer: string; url: string; start: string; end: string; applyUrl?: string }
+);
 
+/**
+ * Fire agencies with single-role EMT programs, watched on their own governmentjobs.com page
+ * (newest first). The site-wide search can lag behind; Sac City Fire's single-role EMT posting
+ * closed 14 minutes after opening. The slug is the part after /careers/ in the agency's job links.
+ */
+const FIRE_AGENCIES: Record<string, string> = {
+  saccity: "Sac City Fire",
+  smfd: "Sac Metro Fire",
+  cosumnescsd: "Cosumnes Fire",
+  confire: "ConFire",
+  srvfire: "San Ramon Valley Fire",
+  mofd: "Moraga-Orinda Fire",
+  paloaltoca: "Palo Alto Fire",
+};
+
+// 911 employers only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic, NorCal,
+// LIFEwest, AlphaOne, West Coast Medical) are left out on purpose.
+// King-American (SF 911) has no public feed - its Paycom board needs a session token - so use the
+// "Create Job Alerts" button on its board instead.
 export const SOURCES: SourceConfig[] = [
   // AMR + sister brands (CrowdRx event EMT, etc.) - iCIMS JSON API, has coordinates.
   { kind: "gmr", name: "AMR / GMR" },
   // Falck Northern California (Alameda County 911). Falck runs a separate OnShift
   // tenant per region - add more here (find the slug from an apply link).
   // Occasionally rate-limits (403) - the worker backs off automatically.
-  { kind: "onshift", name: "Falck NorCal", tenant: "falcknc" },
+  { kind: "onshift", name: "Falck NorCal", tenant: "falcknc", everyMinutes: 5 },
   // Most Bay Area / Sacramento fire districts & cities post on governmentjobs.com.
   {
     kind: "neogov",
@@ -57,5 +89,19 @@ export const SOURCES: SourceConfig[] = [
   },
   // Smaller agencies (Benicia, Moraga-Orinda, Pacifica, San Bruno…) use CalOpps.
   // Also rate-limits occasionally. One keyword: CalOpps' "EMT" search also matches the spelled-out title.
-  { kind: "calopps", name: "CalOpps", keywords: ["EMT"] },
+  { kind: "calopps", name: "CalOpps", keywords: ["EMT"], everyMinutes: 5 },
+  ...Object.entries(FIRE_AGENCIES).map(([agency, name]) => ({ kind: "neogovAgency" as const, name, agency })),
+  // Fire departments hiring off FCTC's Statewide Eligibility List (Sac City pulls single-role EMTs from it).
+  { kind: "fctc", name: "FCTC", everyMinutes: 5 },
+  // Medic Ambulance (Solano 911, Sonoma, Sacramento) lists open roles as plain text; alerts when EMT (re)appears.
+  {
+    kind: "listPage",
+    name: "Medic Ambulance",
+    employer: "Medic Ambulance",
+    url: "https://www.medicambulance.net/open-positions",
+    start: "Open Positions:",
+    end: "Apply Now",
+    applyUrl: "https://medicambulance.formstack.com/forms/medic_employment_application",
+    everyMinutes: 5,
+  },
 ];

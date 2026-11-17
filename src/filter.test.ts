@@ -12,8 +12,8 @@ const yes = [
   "Emergency Medical Technician (EMT) Non-Safety",
   "Emergency Medical Technician - Single Role",
   "Firefighter/EMT (Single Role)",
-  "IFT EMT Part-Time",
   "E.M.T. Basic",
+  "Sacramento Fire Emergency Medical Technician",
 ];
 const no = [
   "Paramedic",
@@ -28,6 +28,9 @@ const no = [
   "Adjunct Associate Professor of Emergency Medical Technologies (EMT) Pool",
   "SkillBridge EMT Intern",
   "Reserve Firefighter/EMT",
+  "IFT EMT Part-Time",
+  "EMT - Interfacility Transport",
+  "Wheelchair Van Driver / EMT",
   "EMT Field Training Officer Supervisor",
   "Emergency Medical Services (EMS) Specialist",
 ];
