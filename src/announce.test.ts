@@ -107,7 +107,8 @@ beforeEach(() => {
 const email = (from: string, subject: string, text: string) =>
   ({
     from,
-    raw: new Response(`From: ${from}\r\nTo: announce@stovold.dev\r\nSubject: ${subject}\r\n\r\n${text}\r\n`).body,
+    raw: new Response(`From: ${from}\r\nTo: announce@morgannstovold.com\r\nSubject: ${subject}\r\n\r\n${text}\r\n`)
+      .body,
     forward: async (to: string) => void forwarded.push(to),
   }) as any;
 

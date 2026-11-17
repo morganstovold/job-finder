@@ -178,7 +178,7 @@ export default {
     await handleNotifyBatch(batch, env);
   },
 
-  // announce@stovold.dev: agency interest-list emails, the early warning before a posting exists.
+  // announce@morgannstovold.com: agency interest-list emails, the early warning before a posting exists.
   async email(message: ForwardableEmailMessage, env: WorkerEnv): Promise<void> {
     const result = await handleAnnouncementEmail(message, env);
     console.log(`announce@ from ${message.from}: ${JSON.stringify(result)}`);
