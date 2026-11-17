@@ -6,11 +6,24 @@ import * as Redacted from "effect/Redacted";
 
 const DOMAIN = "jobs.stovold.dev";
 
+/**
+ * Every outbound alert goes through `notify` (retried with backoff); messages that exhaust their
+ * retries land on `notify-dlq`, whose consumer makes one last attempt over the other channel.
+ * Named per stage so the consumer can tell the two apart (`batch.queue`).
+ */
+const NotifyQueues = Effect.gen(function* () {
+  const stage = yield* Alchemy.Stage;
+  const queue = yield* Cloudflare.Queues.Queue("Notify", { name: `job-finder-notify-${stage}` });
+  const dlq = yield* Cloudflare.Queues.Queue("NotifyDlq", { name: `job-finder-notify-dlq-${stage}` });
+  return { queue, dlq };
+});
+
 export const Worker = Cloudflare.Worker(
   "JobWatch",
   Effect.gen(function* () {
     // Only prod claims the custom domain, so `bun run dev` / other stages don't fight over it.
     const isProd = (yield* Alchemy.Stage) === "prod";
+    const { queue, dlq } = yield* NotifyQueues;
     return {
       main: "./src/worker.ts",
       domain: isProd ? DOMAIN : undefined,
@@ -18,6 +31,8 @@ export const Worker = Cloudflare.Worker(
       crons: ["* * * * *"],
       env: {
         DB: Cloudflare.D1.Database("JobsDb", { migrations: "./migrations" }),
+        NOTIFY: queue,
+        NOTIFY_DLQ_NAME: dlq.queueName,
         // Cloudflare Email Routing send_email binding - free; the recipient must be a
         // verified destination address on the account.
         EMAIL: Cloudflare.Email.SendEmail("Email"),
@@ -42,6 +57,20 @@ export default Alchemy.Stack(
   { providers: Cloudflare.providers(), state: Cloudflare.state() },
   Effect.gen(function* () {
     const worker = yield* Worker;
+    const { queue, dlq } = yield* NotifyQueues;
+    yield* Cloudflare.Queues.Consumer("NotifyConsumer", {
+      queueId: queue.queueId,
+      scriptName: worker.workerName,
+      deadLetterQueue: dlq.queueName,
+      // ~8 retries with the consumer's own short backoff (10s, 30s, 1m, 2m, 5m…); deliver fast.
+      settings: { batchSize: 10, maxWaitTimeMs: 1000, maxRetries: 8, retryDelay: 10 },
+    });
+    // Without a consumer, dead-lettered messages would expire unseen.
+    yield* Cloudflare.Queues.Consumer("NotifyDlqConsumer", {
+      queueId: dlq.queueId,
+      scriptName: worker.workerName,
+      settings: { batchSize: 10, maxWaitTimeMs: 1000, maxRetries: 2 },
+    });
     return { url: worker.url };
   }),
 );

@@ -50,8 +50,8 @@ async function gmr(src: Extract<SourceConfig, { kind: "gmr" }>): Promise<Job[]> 
       if (src.brands && !src.brands.includes(brand)) continue;
       const lat = d.latitude != null ? Number(d.latitude) : undefined;
       const lng = d.longitude != null ? Number(d.longitude) : undefined;
-      // Nationwide "float" jobs have no coordinates - keep only California ones.
-      if (lat == null && d.state !== "California") continue;
+      // Nationwide "float" jobs have no coordinates - keep only ones whose city is nearby.
+      if (lat == null && !isNearbyText(d.city, d.state)) continue;
       jobs.push({
         id: `gmr:${d.req_id}`,
         source: src.name,

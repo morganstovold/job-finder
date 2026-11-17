@@ -14,6 +14,7 @@ export const TITLE_INCLUDE: RegExp[] = [
   /\bE\.?M\.?T\b/i,
   /emergency medical tech/i,
   /\bH-?0?03\b/i, // SFFD H-3 "EMT & Paramedic" class
+  /\bEMS\b.*trainee|emergency medical services trainee/i, // Sac Fire's internal single-role title
   /ambulance (attendant|operator)/i,
 ];
 
@@ -22,15 +23,30 @@ export const TITLE_EXCLUDE: RegExp[] = [
   /instructor|faculty|professor|teacher|educat|coordinator|manager|director|supervisor|scheduler/i,
   /\bA-?EMT\b|advanced emt|emt-?a\b|emt-?p\b|emt-?i\b/i, // AEMT / paramedic-level
   /intern\b|internship|skillbridge|volunteer/i,
-  // 911 only: you already work IFT. Catches IFT postings at 911 companies (e.g. AMR "EMT - IFT").
-  /\bIFT\b|inter-?facility|non-?emergency|wheelchair|gurney/i,
+  /\bevent\b/i, // event standby (e.g. CrowdRx), not 911
 ];
+
+/**
+ * 911 only: you already work IFT. Catches IFT postings at 911 companies (e.g. AMR "EMT - IFT"),
+ * except 911/IFT hybrids - a title that also says 911 still counts.
+ */
+export const IFT_EXCLUDE = /\bIFT\b|inter-?facility|non-?emergency|wheelchair|gurney/i;
 
 /** Firefighter/EMT titles are skipped unless they match this, e.g. "EMT (Non-Safety)". */
 export const FIREFIGHTER_OK = /single[- ]role|non[- ]safety/i;
 
 export type SourceConfig = {
   name: string;
+  /**
+   * Pushover priority for this board's new jobs: 2 = emergency (repeats until acknowledged) for the
+   * boards where postings close in minutes, 1 = high for the rest. Default 1.
+   */
+  priority?: 1 | 2;
+  /**
+   * The board always has listings, so 0 after a non-zero count means the parser broke. Counts as a
+   * failure for the "board broken" alert, but without backoff (an empty board can be real).
+   */
+  expectNonEmpty?: boolean;
   /**
    * Minimum minutes between checks (default 1 = every cron tick). Postings can close within
    * 15-45 min of going up, so keep this low; boards that rate-limit get a little more room.
@@ -56,6 +72,7 @@ const FIRE_AGENCIES: Record<string, string> = {
   srvfire: "San Ramon Valley Fire",
   mofd: "Moraga-Orinda Fire",
   paloaltoca: "Palo Alto Fire",
+  folsom: "Folsom Fire",
 };
 
 // 911 employers only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic, NorCal,
@@ -63,8 +80,8 @@ const FIRE_AGENCIES: Record<string, string> = {
 // King-American (SF 911) has no public feed - its Paycom board needs a session token - so use the
 // "Create Job Alerts" button on its board instead.
 export const SOURCES: SourceConfig[] = [
-  // AMR + sister brands (CrowdRx event EMT, etc.) - iCIMS JSON API, has coordinates.
-  { kind: "gmr", name: "AMR / GMR" },
+  // AMR + sister brands - iCIMS JSON API, has coordinates. AMR postings have closed in ~45 min.
+  { kind: "gmr", name: "AMR / GMR", priority: 2, expectNonEmpty: true },
   // Falck Northern California (Alameda County 911). Falck runs a separate OnShift
   // tenant per region - add more here (find the slug from an apply link).
   // Occasionally rate-limits (403) - the worker backs off automatically.
@@ -88,5 +105,11 @@ export const SOURCES: SourceConfig[] = [
   // Smaller agencies (Benicia, Moraga-Orinda, Pacifica, San Bruno…) use CalOpps.
   // Also rate-limits occasionally. One keyword: CalOpps' "EMT" search also matches the spelled-out title.
   { kind: "calopps", name: "CalOpps", keywords: ["EMT"], everyMinutes: 5 },
-  ...Object.entries(FIRE_AGENCIES).map(([agency, name]) => ({ kind: "neogovAgency" as const, name, agency })),
+  ...Object.entries(FIRE_AGENCIES).map(([agency, name]) => ({
+    kind: "neogovAgency" as const,
+    name,
+    agency,
+    priority: 2 as const,
+    expectNonEmpty: true,
+  })),
 ];

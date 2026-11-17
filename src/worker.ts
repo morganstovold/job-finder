@@ -1,7 +1,7 @@
 import type { WorkerEnv } from "../alchemy.run.ts";
 import { HOME, SOURCES } from "./config.ts";
 import { isMatch } from "./filter.ts";
-import { notifyNewJobs, sendEmail, sendPush } from "./notify.ts";
+import { enqueue, handleNotifyBatch, jobMessages, type NotifyMessage } from "./notify.ts";
 import { fetchSource } from "./sources.ts";
 import type { Job } from "./types.ts";
 
@@ -39,6 +39,8 @@ type Status = {
   last_ok: number | null;
   alerted: number;
   last_count: number | null;
+  last_error: string | null;
+  last_error_at: number | null;
   failures: number;
   next_attempt: number | null;
 };
@@ -48,7 +50,7 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   const status = new Map(
     (
       await env.DB.prepare(
-        `SELECT source, last_ok, last_count, alerted, failures, next_attempt FROM source_status`,
+        `SELECT source, last_ok, last_count, last_error, last_error_at, alerted, failures, next_attempt FROM source_status`,
       ).all<Status>()
     ).results.map((s) => [s.source, s]),
   );
@@ -61,10 +63,13 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   const broken: string[] = [];
 
   for (const [i, r] of results.entries()) {
-    const { name, everyMinutes = 1 } = sources[i];
-    if (r.status === "fulfilled") {
+    const { name, everyMinutes = 1, expectNonEmpty } = sources[i];
+    const prev = status.get(name);
+    // A board that always has listings returning none means the parser broke (or the site changed).
+    const emptied = r.status === "fulfilled" && expectNonEmpty && r.value.length === 0 && (prev?.last_count ?? 0) > 0;
+
+    if (r.status === "fulfilled" && !emptied) {
       matches.push(...r.value.filter(isMatch));
-      const prev = status.get(name);
       // Skip the write when nothing changed: healthy before, same listing count, refreshed recently.
       const changed =
         !prev?.last_ok ||
@@ -79,26 +84,33 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
              ON CONFLICT (source) DO UPDATE SET last_ok = ?2, last_count = ?3, alerted = 0, failures = 0, next_attempt = NULL`,
           ).bind(name, now, r.value.length),
         );
-    } else {
-      const msg = String(r.reason?.message ?? r.reason).slice(0, 500);
-      const prev = status.get(name);
-      const failures = (prev?.failures ?? 0) + 1;
-      const wait = backoffMs(failures, everyMinutes);
-      const retryAt = now + wait;
-      console.error(`${name} failed (${failures}x, retry in ${wait / 60_000} min): ${msg}`);
-      // ~6h of failures: measured from the last success, or by count (8 = several hours of backoff) for a board that never worked.
-      const longBroken = prev?.last_ok ? now - prev.last_ok > BROKEN_AFTER_MS : failures >= 8;
-      const shouldAlert = !prev?.alerted && longBroken;
-      if (shouldAlert) broken.push(`${name}: ${msg}`);
+      continue;
+    }
+
+    const msg =
+      r.status === "rejected"
+        ? String(r.reason?.message ?? r.reason).slice(0, 500)
+        : `returned 0 listings (was ${prev?.last_count}) - parser likely broken`;
+    const failures = (prev?.failures ?? 0) + 1;
+    // No backoff for an emptied board: it may really be empty, and its next posting must not wait an hour.
+    const wait = emptied ? 0 : backoffMs(failures, everyMinutes);
+    console.error(`${name} failed (${failures}x, retry in ${wait / 60_000} min): ${msg}`);
+    // ~6h of failures: measured from the last success, or by count (8 = several hours of backoff) for a board that never worked.
+    const longBroken = prev?.last_ok ? now - prev.last_ok > BROKEN_AFTER_MS : failures >= 8;
+    const shouldAlert = !prev?.alerted && longBroken;
+    if (shouldAlert) broken.push(`${name}: ${msg}`);
+    // An emptied board fails every minute; only rewrite its row when something changes.
+    const sameAsBefore =
+      emptied && prev?.failures && prev.last_error === msg && now - (prev.last_error_at ?? 0) < TOUCH_EVERY_MS;
+    if (!sameAsBefore || shouldAlert)
       statusWrites.push(
         env.DB.prepare(
           `INSERT INTO source_status (source, last_error, last_error_at, alerted, failures, next_attempt)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
            ON CONFLICT (source) DO UPDATE SET last_error = ?2, last_error_at = ?3,
              alerted = MAX(alerted, ?4), failures = ?5, next_attempt = ?6`,
-        ).bind(name, msg, now, shouldAlert ? 1 : 0, failures, retryAt),
+        ).bind(name, msg, now, shouldAlert ? 1 : 0, failures, now + wait),
       );
-    }
   }
 
   // The same posting can show up on two boards (e.g. SFFD on SmartRecruiters + CalOpps) - those have
@@ -122,14 +134,28 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   ]);
   const fresh = unique.filter((_, i) => (batch[i]?.results?.length ?? 0) > 0);
 
-  if (fresh.length) await notifyNewJobs(env, fresh);
+  const messages: NotifyMessage[] = jobMessages(fresh);
   if (broken.length) {
     const body = `These job boards have been failing for 6+ hours - the scraper probably needs a fix:\n\n${broken.join("\n")}`;
-    await Promise.allSettled([
-      sendEmail(env, "EMT Job Watch: a job board stopped working", body, `<pre>${body}</pre>`),
-      sendPush(env, "Job board scraper broken", broken.join("\n")),
-    ]);
+    const dedupeKey = `broken:${broken.map((b) => b.split(":")[0]).join("|")}:${new Date(now).toISOString().slice(0, 13)}`;
+    messages.push(
+      {
+        kind: "email",
+        title: "EMT Job Watch: a job board stopped working",
+        body,
+        priority: 1,
+        dedupeKey: `${dedupeKey}:email`,
+      },
+      {
+        kind: "push",
+        title: "Job board scraper broken",
+        body: broken.join("\n"),
+        priority: 1,
+        dedupeKey: `${dedupeKey}:push`,
+      },
+    );
   }
+  await enqueue(env, messages);
 
   const summary = { matches: unique.length, new: fresh.map((j) => `${j.employer}: ${j.title}`), broken };
   console.log(JSON.stringify(summary));
@@ -176,17 +202,26 @@ export default {
 
     if (url.pathname === "/run" && authed) return Response.json(await run(env, { manual: true }));
     if (url.pathname === "/test" && authed) {
-      await notifyNewJobs(env, [
-        {
-          id: "test",
-          source: "test",
-          title: "Test alert - EMT Job Watch is working",
-          employer: "EMT Job Watch",
-          location: HOME.label,
-          url: url.origin,
-        },
-      ]);
-      return new Response("sent\n");
+      // Goes through the notify Queue like a real alert. A fresh id each time so dedupe doesn't skip it.
+      const id = `test:${Date.now()}`;
+      const priority = url.searchParams.get("priority") === "2" ? 2 : 1;
+      await enqueue(
+        env,
+        jobMessages(
+          [
+            {
+              id,
+              source: "test",
+              title: "Test alert - EMT Job Watch is working",
+              employer: "EMT Job Watch",
+              location: HOME.label,
+              url: url.origin,
+            },
+          ],
+          { priority: () => priority },
+        ),
+      );
+      return new Response(`queued (priority ${priority})\n`);
     }
     if (url.pathname === "/") return dashboard(env);
     return new Response("not found\n", { status: 404 });
@@ -194,5 +229,9 @@ export default {
 
   async scheduled(_controller: ScheduledController, env: WorkerEnv): Promise<void> {
     await run(env);
+  },
+
+  async queue(batch: MessageBatch<NotifyMessage>, env: WorkerEnv): Promise<void> {
+    await handleNotifyBatch(batch, env);
   },
 };

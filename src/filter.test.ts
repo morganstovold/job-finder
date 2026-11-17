@@ -6,7 +6,6 @@ import { isNearbyText } from "./nearby.ts";
 const yes = [
   "EMT",
   "EMT - 911 Full Time",
-  "Event EMT San Francisco CrowdRx",
   "EMT/Paramedic - San Francisco Fire Department (H003)",
   "H003- EMT & Paramedic",
   "Emergency Medical Technician (EMT) Non-Safety",
@@ -14,6 +13,9 @@ const yes = [
   "Firefighter/EMT (Single Role)",
   "E.M.T. Basic",
   "Sacramento Fire Emergency Medical Technician",
+  "EMS Trainee",
+  "EMT - 911/IFT",
+  "EMT 911 Interfacility Hybrid",
 ];
 const no = [
   "Paramedic",
@@ -29,6 +31,7 @@ const no = [
   "SkillBridge EMT Intern",
   "Reserve Firefighter/EMT",
   "IFT EMT Part-Time",
+  "Event EMT San Francisco CrowdRx",
   "EMT - Interfacility Transport",
   "Wheelchair Van Driver / EMT",
   "EMT Field Training Officer Supervisor",

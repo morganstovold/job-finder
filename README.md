@@ -35,7 +35,22 @@ success. D1 is only written when something changes, about 1,600 rows a day again
 
 Each job alerts **once**, the first time it's seen (tracked in D1). The first run after deploying
 emails everything currently open. If a board fails for 6+ hours (usually because the site changed),
-you get one "scraper broken" alert.
+you get one "scraper broken" alert. AMR and the fire agency pages always have listings, so if one
+suddenly returns none, that counts as a failure too (a broken parser looks like an empty board). It
+still gets checked every minute, since the board might really be empty.
+
+### Alert priority and delivery
+
+Each board has a Pushover `priority` in `src/config.ts`: **2 (emergency, repeats every 30s until
+you acknowledge it)** for AMR and the fire agency pages, where postings close in minutes, and **1
+(high, sounds through quiet hours)** for the rest.
+
+Alerts never go out directly. Each one (a push per job, so tapping opens its apply page, plus one
+summary email) is a message on the `notify` Cloudflare Queue. The consumer retries a failed send
+after 10s, 30s, 1m, 2m, 5m… (8 tries). A message that still fails lands on `notify-dlq`, which makes
+one last attempt over the **other** channel (a failed push becomes an email and vice versa), so a
+broken Pushover token still reaches your inbox. Queues deliver at least once, so each alert's dedupe
+key is recorded in D1 (`sent`) and repeats are skipped.
 
 ## Setup
 
@@ -45,8 +60,7 @@ you get one "scraper broken" alert.
 2. **Push (optional, the "SMS").** Install [Pushover](https://pushover.net) (iOS/Android, $5 one-time
    after a 30-day trial) and log in. Copy your **user key** from the Pushover dashboard, then create an
    application ("Create an Application/API Token") and copy its **API token**. Each alert links to the
-   job's apply page, with a Dashboard link in the message. Alerts use priority 1 (sounds even during
-   quiet hours); set `PUSH_PRIORITY = 2` in `src/notify.ts` to make them repeat until acknowledged.
+   job's apply page, with a Dashboard link in the message. Alert priority is set per board (see above).
 3. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `PUSHOVER_USER`, `PUSHOVER_TOKEN`, and `ADMIN_KEY`.
 4. Deploy:
 
@@ -54,7 +68,8 @@ you get one "scraper broken" alert.
    bun run deploy
    ```
 
-5. Test: visit `https://jobs.stovold.dev/test?key=<ADMIN_KEY>` to send a test alert, or
+5. Test: visit `https://jobs.stovold.dev/test?key=<ADMIN_KEY>` to send a test alert through the
+   queue (add `&priority=2` to try an emergency push), or
    `/run?key=<ADMIN_KEY>` to run a check now. `/` is a small dashboard of recent matches and
    board health.
 
