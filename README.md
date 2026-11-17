@@ -70,11 +70,16 @@ you acknowledge it)** for AMR and the fire agency pages, where postings close in
 (high, sounds through quiet hours)** for the rest.
 
 Alerts never go out directly. Each one (a push per job, so tapping opens its apply page, plus one
-summary email) is a message on the `notify` Cloudflare Queue. The consumer retries a failed send
-after 10s, 30s, 1m, 2m, 5m… (8 tries). A message that still fails lands on `notify-dlq`, which makes
-one last attempt over the **other** channel (a failed push becomes an email and vice versa), so a
-broken Pushover token still reaches your inbox. Queues deliver at least once, so each alert's dedupe
-key is recorded in D1 (`sent`) and repeats are skipped.
+summary email) is a message on the `notify` Cloudflare Queue:
+
+- **Push:** tried 3 times (now, +10s, +30s). If the third try fails, the same alert is **emailed
+  right away**, so a broken Pushover costs you under a minute, not an hour of retries.
+- **Email:** retried after 10s, 30s, 1m, 2m, 5m… (8 tries).
+- A message that still fails lands on `notify-dlq`, which makes one last attempt as a push (the
+  channel not being retried by then), then gives up and logs.
+
+Queues deliver at least once, so each alert's dedupe key is recorded in D1 (`sent`) and repeats are
+skipped.
 
 ## Setup
 

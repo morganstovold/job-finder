@@ -32,6 +32,12 @@ export interface NotifyMessage {
 /** Retry delays for a failed send, by attempt. Alerts are time-critical, so start short. */
 const RETRY_DELAYS_S = [10, 30, 60, 120, 300, 600, 900, 1800];
 
+/**
+ * A push gets this many tries (now, +10s, +30s). If the last one fails, the same alert goes out by
+ * email right away, so a broken Pushover costs under a minute, not an hour of retries.
+ */
+export const PUSH_TRIES = 3;
+
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 const line = (j: Job) => [j.title, j.employer, j.location, j.detail].filter(Boolean).join(" · ");
@@ -149,34 +155,58 @@ const markSent = (env: WorkerEnv, key: string) =>
   env.DB.prepare(`INSERT OR IGNORE INTO sent (key, sent_at) VALUES (?, ?)`).bind(key, Date.now()).run();
 
 /**
- * Queue consumer for both `notify` and its dead-letter queue. Main queue: send, record the dedupe
- * key, ack; on failure retry with a short backoff. After `max_retries` the message lands on the DLQ,
- * whose consumer makes one last attempt over the other channel, then gives up and logs.
+ * Queue consumer for both `notify` and its dead-letter queue.
+ *
+ * Main queue: send, record the dedupe key, ack; on failure retry with a short backoff. A push that
+ * fails PUSH_TRIES times switches to email immediately (and stays on email for later retries).
+ * After `max_retries` a message lands on the DLQ, whose consumer makes one last attempt as a push
+ * (the channel not being retried by then), then gives up and logs.
  */
 export async function handleNotifyBatch(batch: MessageBatch<NotifyMessage>, env: WorkerEnv) {
   const isDlq = batch.queue === env.NOTIFY_DLQ_NAME;
   for (const msg of batch.messages) {
-    const m = isDlq ? otherChannel(env, msg.body) : msg.body;
-    const key = isDlq ? `fallback:${msg.body.dedupeKey}` : msg.body.dedupeKey;
-    try {
-      if (await wasSent(env, key)) {
-        msg.ack();
-        continue;
+    const original = msg.body;
+    const asEmail = { m: otherChannel(env, original), key: `fallback:${original.dedupeKey}` };
+    // Which channel this attempt uses.
+    const plan = isDlq
+      ? original.kind === "email"
+        ? { m: otherChannel(env, original), key: `fallback:${original.dedupeKey}` }
+        : { m: original, key: `last:${original.dedupeKey}` }
+      : original.kind === "push" && msg.attempts > PUSH_TRIES
+        ? asEmail
+        : { m: original, key: original.dedupeKey };
+
+    const send = async ({ m, key }: { m: NotifyMessage; key: string }) => {
+      if (!(await wasSent(env, key))) {
+        await deliver(env, m);
+        await markSent(env, key);
       }
-      await deliver(env, m);
-      await markSent(env, key);
+    };
+
+    try {
+      await send(plan);
       msg.ack();
     } catch (e) {
       // Log the message as a string: Workers logs drop an Error object's message and keep only its stack.
       const err = (e as Error)?.message ?? String(e);
       if (isDlq) {
-        console.error(`notify fallback (${m.kind}) failed, giving up: ${err} [${key}]`);
+        console.error(`notify last attempt (${plan.m.kind}) failed, giving up: ${err} [${plan.key}]`);
         msg.ack();
-      } else {
-        const delaySeconds = RETRY_DELAYS_S[Math.min(msg.attempts, RETRY_DELAYS_S.length) - 1];
-        console.error(`notify ${m.kind} failed (attempt ${msg.attempts}, retry in ${delaySeconds}s): ${err}`);
-        msg.retry({ delaySeconds });
+        continue;
       }
+      if (plan.m.kind === "push" && msg.attempts >= PUSH_TRIES) {
+        console.error(`notify push failed ${msg.attempts}x, sending by email instead: ${err}`);
+        try {
+          await send(asEmail);
+          msg.ack();
+          continue;
+        } catch (e2) {
+          console.error(`notify email fallback failed: ${(e2 as Error)?.message ?? String(e2)}`);
+        }
+      }
+      const delaySeconds = RETRY_DELAYS_S[Math.min(msg.attempts, RETRY_DELAYS_S.length) - 1];
+      console.error(`notify ${plan.m.kind} failed (attempt ${msg.attempts}, retry in ${delaySeconds}s): ${err}`);
+      msg.retry({ delaySeconds });
     }
   }
 }
