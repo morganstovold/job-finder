@@ -62,13 +62,26 @@ export const fromPT = (year: number, month: number, day: number, hour = 0, minut
  * chrono reads the wall-clock values; the Pacific conversion is done here, because chrono's own
  * `timezone` option leans on the machine's zone (Workers run in UTC).
  */
+/** A date right after one of these is a closing date ("accepted through Nov 30", "closes 11/30"). */
+const CLOSING_BEFORE = /\b(through|thru|until|till|by|close[sd]?|closing|deadline|due|ends?)\b/i;
+
 export function parseOpenAt(subject: string, text: string, receivedAt: number): number | null {
   const sentences = `${subject}.\n${text}`.split(/(?<=[.!?])\s+|\n+/).filter((s) => OPENING.test(s));
   const p = ptParts(receivedAt);
   // chrono resolves "Nov 16" / "Monday" against a reference date; give it today's date in Pacific.
   const ref = new Date(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
   for (const sentence of sentences) {
-    for (const r of chrono.parse(sentence, ref, { forwardDate: true })) {
+    const openings = [...sentence.matchAll(new RegExp(OPENING.source, "gi"))].map((m) => m.index! + m[0].length);
+    // Within a sentence, prefer the date closest after an opening keyword; dates before any keyword last.
+    const distance = (index: number) => {
+      const before = openings.filter((o) => o <= index);
+      return before.length ? index - Math.max(...before) : Number.MAX_SAFE_INTEGER;
+    };
+    const candidates = chrono
+      .parse(sentence, ref, { forwardDate: true })
+      .filter((r) => !CLOSING_BEFORE.test(sentence.slice(Math.max(0, r.index - 25), r.index)))
+      .toSorted((a, b) => distance(a.index) - distance(b.index));
+    for (const r of candidates) {
       const c = r.start;
       const hasTime = c.isCertain("hour");
       const at = fromPT(
@@ -101,42 +114,49 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
   // is lost if anything below fails.
   if (env.NOTIFY_EMAIL) await message.forward(env.NOTIFY_EMAIL);
 
-  const announcer = findAnnouncer(message.from);
-  if (!announcer) return { action: "forwarded", reason: "unknown sender" };
+  // Nothing below may throw: an error here bounces the mail back to the agency's list server, which
+  // can unsubscribe the address. The email was already forwarded, so log and move on.
+  try {
+    const announcer = findAnnouncer(message.from);
+    if (!announcer) return { action: "forwarded", reason: "unknown sender" };
 
-  const email = await PostalMime.parse(message.raw);
-  const subject = email.subject ?? "";
-  const text = email.text ?? (email.html ?? "").replace(/<[^>]+>/g, " ");
-  if (!isRelevant(subject, text)) return { action: "forwarded", reason: "not relevant" };
+    const email = await PostalMime.parse(message.raw);
+    const subject = email.subject ?? "";
+    const text = email.text ?? (email.html ?? "").replace(/<[^>]+>/g, " ");
+    if (!isRelevant(subject, text)) return { action: "forwarded", reason: "not relevant" };
 
-  const receivedAt = Date.now();
-  const openAt = parseOpenAt(subject, text, receivedAt);
-  const row = await env.DB.prepare(
-    `INSERT INTO announcements (announcer, subject, received_at, open_at) VALUES (?, ?, ?, ?) RETURNING id`,
-  )
-    .bind(announcer.name, subject.slice(0, 300), receivedAt, openAt)
-    .first<{ id: number }>();
-  const id = row!.id;
+    const receivedAt = Date.now();
+    const openAt = parseOpenAt(subject, text, receivedAt);
+    const row = await env.DB.prepare(
+      `INSERT INTO announcements (announcer, subject, received_at, open_at) VALUES (?, ?, ?, ?) RETURNING id`,
+    )
+      .bind(announcer.name, subject.slice(0, 300), receivedAt, openAt)
+      .first<{ id: number }>();
+    const id = row!.id;
 
-  await enqueue(env, [
-    {
-      kind: "push",
-      title: `${announcer.name}: single-role EMT opening announced - ${openAt ? `opens ${fmtPT(openAt)}` : "date not stated"}`,
-      body: subject,
-      priority: 1,
-      dedupeKey: `announce:${id}`,
-    },
-  ]);
+    await enqueue(env, [
+      {
+        kind: "push",
+        title: `${announcer.name}: single-role EMT opening announced - ${openAt ? `opens ${fmtPT(openAt)}` : "date not stated"}`,
+        body: subject,
+        priority: 1,
+        dedupeKey: `announce:${id}`,
+      },
+    ]);
 
-  await env.ANNOUNCE_WF.create({ id: `ann-${id}`, params: { announcementId: id } });
+    await env.ANNOUNCE_WF.create({ id: `ann-${id}`, params: { announcementId: id } });
 
-  // The posting may already be live: check the announcer's boards now. A match is claimed and
-  // confirmed through the normal path (priority 2, "OPEN NOW -").
-  const sources = SOURCES.filter((s) => announcer.sources.includes(s.name));
-  const found = (await Promise.allSettled(sources.map(fetchSource))).flatMap((r) =>
-    r.status === "fulfilled" ? r.value : [],
-  );
-  await claimAndNotify(env, found, receivedAt);
+    // The posting may already be live: check the announcer's boards now. A match is claimed and
+    // confirmed through the normal path (priority 2, "OPEN NOW -").
+    const sources = SOURCES.filter((s) => announcer.sources.includes(s.name));
+    const found = (await Promise.allSettled(sources.map(fetchSource))).flatMap((r) =>
+      r.status === "fulfilled" ? r.value : [],
+    );
+    await claimAndNotify(env, found, receivedAt);
 
-  return { action: "watching", id, openAt };
+    return { action: "watching", id, openAt };
+  } catch (e) {
+    console.error(`announce@ from ${message.from}: ${(e as Error)?.message ?? e}`);
+    return { action: "forwarded", reason: "error", error: String((e as Error)?.message ?? e) };
+  }
 }

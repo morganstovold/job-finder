@@ -73,10 +73,19 @@ export async function claimAndNotify(env: WorkerEnv, jobs: Job[], now: number, e
   const opened = fresh.filter(announcementFor);
   const regular = fresh.filter((j) => !announcementFor(j));
 
-  await enqueue(env, [
-    ...jobMessages(regular),
-    ...jobMessages(opened, { priority: () => 2, prefix: () => "OPEN NOW - " }),
-  ]);
+  // If the alerts can't be queued, un-claim these jobs so the next run claims (and alerts) them again,
+  // instead of them being marked seen with no alert ever sent.
+  try {
+    await enqueue(env, [
+      ...jobMessages(regular),
+      ...jobMessages(opened, { priority: () => 2, prefix: () => "OPEN NOW - " }),
+    ]);
+  } catch (e) {
+    await env.DB.prepare(`DELETE FROM jobs WHERE id IN (SELECT value FROM json_each(?))`)
+      .bind(JSON.stringify(fresh.map((j) => j.id)))
+      .run();
+    throw e;
+  }
   const confirmed = new Set<number>();
   for (const j of opened) {
     const row = announcementFor(j)!;

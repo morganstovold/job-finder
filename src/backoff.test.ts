@@ -172,3 +172,19 @@ test("AMR jobs without coordinates are kept only when the city is nearby", async
   await tick(0);
   expect(queued.filter((m) => m.kind === "push").map((m) => m.url)).toEqual(["https://careers.gmr.net/jobs/10"]);
 });
+
+test("if queueing the alert fails, the job is un-claimed and alerts on the next run", async () => {
+  gmrJobs = [amrJob(20, "Concord", true)];
+  const realNotify = env.NOTIFY;
+  env.NOTIFY = {
+    sendBatch: async () => {
+      throw new Error("queue unavailable");
+    },
+  };
+  await expect(tick(0)).rejects.toThrow("queue unavailable");
+  expect(db.sqlite.query(`SELECT COUNT(*) AS n FROM jobs WHERE id = 'gmr:20'`).get()).toEqual({ n: 0 });
+
+  env.NOTIFY = realNotify;
+  await tick(1);
+  expect(queued.filter((m) => m.kind === "push").map((m) => m.url)).toEqual(["https://careers.gmr.net/jobs/20"]);
+});

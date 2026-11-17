@@ -73,7 +73,8 @@ export async function watchAnnouncement(env: WorkerEnv, id: number, step: Step) 
     await step.do(`remind-${r.minutes}m`, () => remind(env, id, r.minutes));
   }
 
-  // Measured from when the wait starts: the last reminder, or receipt.
+  // Measured from when the wait starts: the last reminder, or receipt. Cloudflare allows waitForEvent
+  // timeouts and sleeps up to 365 days, so the longest wait (270 days, no date stated) is one step.
   const start = reminders.at(-1)?.at ?? row.received_at;
   const timeout = row.open_at ? row.open_at + 30 * DAY_MS - start : 270 * DAY_MS;
   try {

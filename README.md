@@ -35,7 +35,7 @@ success. D1 is only written when something changes, about 1,600 rows a day again
 
 Each job alerts **once**, the first time it's seen (tracked in D1). The first run after deploying
 emails everything currently open. If a board fails for 6+ hours (usually because the site changed),
-you get one "scraper broken" alert. AMR and the fire agency pages always have listings, so if one
+you get one "scraper broken" alert. AMR and Sac City Fire always have listings, so if one
 suddenly returns none, that counts as a failure too (a broken parser looks like an empty board). It
 still gets checked every minute, since the board might really be empty.
 
@@ -53,7 +53,7 @@ those emails go to **`announce@stovold.dev`**, which Email Routing hands to this
 3. You get a push right away: "Sac City Fire: single-role EMT opening announced - opens Mon 11/16
    12:01 AM" (or "date not stated").
 4. That agency's boards are checked immediately, in case the posting is already live.
-5. A durable Cloudflare Workflow per announcement then pushes reminders at **24h, 3h, 30m and 5m
+5. A durable Cloudflare Workflow per announcement then pushes reminders at **24h, 3h and 10m
    before** opening (`REMINDERS_MIN` in `src/config.ts`). The ones within an hour of opening are
    priority 2 (repeat until acknowledged); the rest are priority 1. Reminders whose time had already
    passed when the email arrived are skipped. Then it waits for the posting. When the per-minute

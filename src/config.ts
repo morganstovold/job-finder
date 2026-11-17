@@ -66,13 +66,15 @@ export type SourceConfig = {
  * (newest first). The site-wide search can lag behind; Sac City Fire's single-role EMT posting
  * closed 14 minutes after opening. The slug is the part after /careers/ in the agency's job links.
  */
-const FIRE_AGENCIES: Record<string, string> = {
-  saccity: "Sac City Fire",
-  smfd: "Sac Metro Fire",
-  srvfire: "San Ramon Valley Fire",
-  mofd: "Moraga-Orinda Fire",
-  paloaltoca: "Palo Alto Fire",
-  folsom: "Folsom Fire",
+const FIRE_AGENCIES: Record<string, { name: string; expectNonEmpty?: boolean }> = {
+  // City-wide boards always list something; an empty one means the parser broke.
+  saccity: { name: "Sac City Fire", expectNonEmpty: true },
+  // The rest can legitimately drop to zero (some list only one or two postings), so no empty check.
+  smfd: { name: "Sac Metro Fire" },
+  srvfire: { name: "San Ramon Valley Fire" },
+  mofd: { name: "Moraga-Orinda Fire" },
+  paloaltoca: { name: "Palo Alto Fire" },
+  folsom: { name: "Folsom Fire" },
 };
 
 // 911 employers only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic, NorCal,
@@ -105,12 +107,12 @@ export const SOURCES: SourceConfig[] = [
   // Smaller agencies (Benicia, Moraga-Orinda, Pacifica, San Bruno…) use CalOpps.
   // Also rate-limits occasionally. One keyword: CalOpps' "EMT" search also matches the spelled-out title.
   { kind: "calopps", name: "CalOpps", keywords: ["EMT"], everyMinutes: 5 },
-  ...Object.entries(FIRE_AGENCIES).map(([agency, name]) => ({
+  ...Object.entries(FIRE_AGENCIES).map(([agency, { name, expectNonEmpty }]) => ({
     kind: "neogovAgency" as const,
     name,
     agency,
     priority: 2 as const,
-    expectNonEmpty: true,
+    expectNonEmpty,
   })),
 ];
 
@@ -127,7 +129,7 @@ export interface Announcer {
 }
 
 /**
- * Reminders before an announced opening, in minutes (24h, 3h, 30m, 5m). Ones within an hour of opening
+ * Reminders before an announced opening, in minutes (24h, 3h, 10m). Ones within an hour of opening
  * push at priority 2 (repeat until acknowledged). REMINDER_OFFSETS_MIN in .env overrides the list.
  */
 export const REMINDERS_MIN = [1440, 180, 10];

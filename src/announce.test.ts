@@ -22,6 +22,16 @@ test("opening date/time is read in Pacific time", () => {
   );
 });
 
+test("closing dates are not taken as the opening date", () => {
+  expect(parseOpenAt("", "Applications will be accepted through November 30.", RECEIVED)).toBeNull();
+  expect(parseOpenAt("", "The filing period closes 11/30; applications open Monday 11/16 at 12:01 AM.", RECEIVED)).toBe(
+    Date.parse("2026-11-16T08:01:00Z"),
+  );
+  expect(parseOpenAt("", "Applications open 11/16 at 8 AM and are due by 11/30.", RECEIVED)).toBe(
+    Date.parse("2026-11-16T16:00:00Z"),
+  );
+});
+
 test("no stated date, past dates, and non-opening dates give null", () => {
   expect(parseOpenAt("", "A single role EMT recruitment is expected to open in spring.", RECEIVED)).toBeNull();
   expect(parseOpenAt("", "Applications opened 11/1/2026 at 8 AM.", RECEIVED)).toBeNull();
@@ -184,7 +194,7 @@ const insertAnnouncement = (openAt: number | null) =>
     .query(`INSERT INTO announcements (announcer, subject, received_at, open_at) VALUES (?, ?, ?, ?) RETURNING id`)
     .get("Sac City Fire", "Single Role EMT", RECEIVED, openAt) as { id: number };
 
-test("workflow: reminders at 24h, 3h, 30m and 5m, then confirmed", async () => {
+test("workflow: reminders at 24h, 3h and 10m, then confirmed", async () => {
   const { id } = insertAnnouncement(Date.parse("2026-11-16T08:01:00Z"));
   const { step, log } = fakeStep({ jobId: "neogov:5" });
   expect(await watchAnnouncement(env(), id, step)).toBe("confirmed");
@@ -194,18 +204,15 @@ test("workflow: reminders at 24h, 3h, 30m and 5m, then confirmed", async () => {
     "do remind-1440m=sent",
     "sleep until-180m 2026-11-16T05:01:00.000Z",
     "do remind-180m=sent",
-    "sleep until-30m 2026-11-16T07:31:00.000Z",
-    "do remind-30m=sent",
-    "sleep until-5m 2026-11-16T07:56:00.000Z",
-    "do remind-5m=sent",
+    "sleep until-10m 2026-11-16T07:51:00.000Z",
+    "do remind-10m=sent",
     "wait posting-confirmed 30d",
     "do confirm=confirmed",
   ]);
   expect(queued.map((m) => [m.priority, m.title, m.dedupeKey])).toEqual([
     [1, "Sac City Fire: single-role EMT opens in 24 hours (Mon 11/16 12:01 AM) - application ready?", "remind:1:1440m"],
     [1, "Sac City Fire: single-role EMT opens in 3 hours (Mon 11/16 12:01 AM) - application ready?", "remind:1:180m"],
-    [2, "Sac City Fire: single-role EMT opens in 30 minutes (Mon 11/16 12:01 AM) - get ready to apply", "remind:1:30m"],
-    [2, "Sac City Fire: single-role EMT opens in 5 minutes (Mon 11/16 12:01 AM) - get ready to apply", "remind:1:5m"],
+    [2, "Sac City Fire: single-role EMT opens in 10 minutes (Mon 11/16 12:01 AM) - get ready to apply", "remind:1:10m"],
   ]);
   expect(db.sqlite.query(`SELECT status, job_id FROM announcements`).get()).toEqual({
     status: "confirmed",
@@ -214,11 +221,11 @@ test("workflow: reminders at 24h, 3h, 30m and 5m, then confirmed", async () => {
 });
 
 test("workflow: an email that arrives late only gets the reminders still ahead", async () => {
-  // Arrives 20 minutes before opening: only the 5-minute reminder is still in the future.
+  // Arrives 20 minutes before opening: only the 10-minute reminder is still in the future.
   const { id } = insertAnnouncement(RECEIVED + 20 * 60_000);
   const { step, log } = fakeStep({ jobId: "x" });
   await watchAnnouncement(env(), id, step);
-  expect(log.filter((l) => l.startsWith("do remind"))).toEqual(["do remind-5m=sent"]);
+  expect(log.filter((l) => l.startsWith("do remind"))).toEqual(["do remind-10m=sent"]);
 });
 
 test("workflow: no date stated waits 270 days, then expires", async () => {
@@ -237,8 +244,7 @@ test("workflow: confirmed while sleeping, so later reminders are skipped", async
   expect(log.filter((l) => l.startsWith("do remind"))).toEqual([
     "do remind-1440m=skipped",
     "do remind-180m=skipped",
-    "do remind-30m=skipped",
-    "do remind-5m=skipped",
+    "do remind-10m=skipped",
   ]);
   expect(queued).toEqual([]);
 });
@@ -254,4 +260,14 @@ test("workflow: REMINDER_OFFSETS_MIN overrides the list (any order, any count)",
   ]);
   // Priority 2 only within an hour of opening.
   expect(queued.map((m) => m.priority)).toEqual([1, 2, 2]);
+});
+
+test("errors after forwarding are logged, not thrown (a bounce could unsubscribe the address)", async () => {
+  const broken = { ...env(), NOTIFY: { sendBatch: async () => Promise.reject(new Error("queue down")) } };
+  const result = await handleAnnouncementEmail(
+    email("hr@cityofsacramento.org", "Single Role EMT Recruitment", "Applications open 12/16/2099 at 9 AM."),
+    broken,
+  );
+  expect(forwarded).toEqual(["me@example.com"]);
+  expect(result).toMatchObject({ action: "forwarded", reason: "error", error: "queue down" });
 });
