@@ -133,11 +133,15 @@ async function neogov(src: Extract<SourceConfig, { kind: "neogov" }>): Promise<J
 
 // ── SmartRecruiters (City & County of SF → SFFD H-3) ───────────────────────
 async function smartrecruiters(src: Extract<SourceConfig, { kind: "smartrecruiters" }>): Promise<Job[]> {
-  const q = new URLSearchParams({ q: src.query, limit: "100" });
-  const body = (await (
-    await get(`https://api.smartrecruiters.com/v1/companies/${src.company}/postings?${q}`)
-  ).json()) as { content: any[] };
-  return body.content
+  const content: any[] = [];
+  for (const query of src.queries) {
+    const q = new URLSearchParams({ q: query, limit: "100" });
+    const body = (await (
+      await get(`https://api.smartrecruiters.com/v1/companies/${src.company}/postings?${q}`)
+    ).json()) as { content: any[] };
+    content.push(...body.content);
+  }
+  const jobs = content
     .map((p) => ({
       id: `sr:${p.id}`,
       source: src.name,
@@ -149,6 +153,7 @@ async function smartrecruiters(src: Extract<SourceConfig, { kind: "smartrecruite
       detail: p.typeOfEmployment?.label,
     }))
     .filter((j) => isNearbyText(j.location, j.employer));
+  return dedupe(jobs); // a posting can match several queries
 }
 
 // ── CalOpps (small CA cities & fire districts) ─────────────────────────────
@@ -196,6 +201,37 @@ async function neogovAgency(src: Extract<SourceConfig, { kind: "neogovAgency" }>
   return jobs;
 }
 
+// ── FCTC "Now Hiring" (fire departments recruiting off the Statewide Eligibility List) ──
+// A hand-edited table: each cell is "<Department><br><Position>", sometimes linked.
+async function fctc(src: Extract<SourceConfig, { kind: "fctc" }>): Promise<Job[]> {
+  const page = "https://www.fctconline.org/find-a-job/now-hiring/";
+  const html = await (await get(page)).text();
+  const jobs: Job[] = [];
+  for (const [, cell] of html.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)) {
+    if (/<h3/i.test(cell)) continue; // section headers ("FILING DEADLINES", "CONTINUOUS"…)
+    const href = cell.match(/<a[^>]+href="([^"]+)"/)?.[1];
+    const lines = cell
+      .split(/<br\s*\/?>/i)
+      .map((l) => decode(l.replace(/<[^>]+>/g, "")))
+      .filter(Boolean);
+    if (lines.length < 2) continue;
+    const [employer, ...rest] = lines;
+    const title = rest.join(" ");
+    if (!isNearbyText(employer)) continue;
+    const url = href ? new URL(decode(href), page).toString() : page;
+    jobs.push({
+      // The link makes next year's recruitment (same department + title, new flyer) a new job.
+      id: `fctc:${employer}:${title}:${href ? url : ""}`.toLowerCase(),
+      source: src.name,
+      title,
+      employer,
+      location: "",
+      url,
+    });
+  }
+  return dedupe(jobs);
+}
+
 export const fetchSource = (src: SourceConfig): Promise<Job[]> => {
   switch (src.kind) {
     case "gmr":
@@ -210,5 +246,7 @@ export const fetchSource = (src: SourceConfig): Promise<Job[]> => {
       return calopps(src);
     case "neogovAgency":
       return neogovAgency(src);
+    case "fctc":
+      return fctc(src);
   }
 };

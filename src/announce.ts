@@ -1,11 +1,11 @@
-// Inbound announcement emails ("Sac Fire: single-role EMT applications open 11/16 at 12:01 AM").
+// Inbound announcement emails ("Sac Fire: single-role EMT / Fire Recruit applications open 11/16 at 12:01 AM").
 // Agencies email their interest lists before a posting exists, so these are the only early warning.
 import * as chrono from "chrono-node";
 import PostalMime from "postal-mime";
 
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { ANNOUNCERS, SOURCES, type Announcer } from "./config.ts";
-import { isEmtTitle } from "./filter.ts";
+import { ANNOUNCERS, FF_TRAINEE_EXCLUDE, SOURCES, type Announcer } from "./config.ts";
+import { type Category, classifyTitle } from "./filter.ts";
 import { claimAndNotify } from "./jobs.ts";
 export type { AnnouncementRow } from "./jobs.ts";
 import { enqueue } from "./notify.ts";
@@ -17,11 +17,36 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Sender allowlist: unknown senders are only forwarded. */
 export const findAnnouncer = (from: string): Announcer | undefined => ANNOUNCERS.find((a) => a.from.test(from));
 
-const RELEVANT = /single[- ]role|EMS trainee|emergency medical technician|\bEMT\b/i;
+/** Strong body phrases. Plain "EMT" isn't enough ("EMT certification required" is on every FF posting). */
+const BODY_EMT = /single[- ]role|EMS trainee|Fire Service EMT/i;
+const BODY_FF = /fire ?fighter (trainee|recruit)|fire recruit/gi;
 
-/** Is this about an EMT-B / single-role opening (not, say, a Fire Recruit Paramedic posting)? */
-export const isRelevant = (subject: string, text: string) =>
-  isEmtTitle(subject) || RELEVANT.test(subject) || isEmtTitle(text) || RELEVANT.test(text);
+/** The text around a match, up to sentence boundaries. */
+const sentenceAt = (text: string, index: number) => {
+  const start = Math.max(text.lastIndexOf(".", index), text.lastIndexOf("\n", index)) + 1;
+  const ends = [text.indexOf(".", index), text.indexOf("\n", index)].filter((i) => i >= 0);
+  return text.slice(start, ends.length ? Math.min(...ends) : undefined);
+};
+
+/**
+ * What an announcement is about: "emt" (single-role EMT / EMS trainee), "ff" (firefighter trainee /
+ * recruit), or null (e.g. a Fire Recruit Paramedic recruitment). Subject first, then strong body phrases
+ * with the same paramedic-only and lateral excludes as job titles.
+ */
+export function classifyAnnouncement(subject: string, text: string): Category | null {
+  const fromSubject = classifyTitle(subject);
+  if (fromSubject) return fromSubject;
+  if (BODY_EMT.test(text)) return "emt";
+  for (const m of text.matchAll(BODY_FF)) {
+    const sentence = sentenceAt(text, m.index!);
+    if (FF_TRAINEE_EXCLUDE.test(sentence)) continue;
+    if (/paramedic/i.test(sentence) && !/\bEMT\b/i.test(sentence)) continue;
+    return "ff";
+  }
+  return null;
+}
+
+export const categoryNoun = (c: Category) => (c === "ff" ? "Fire Recruit" : "single-role EMT");
 
 /** Sentences that talk about applications opening; other dates (deadlines, the send date) are ignored. */
 const OPENING = /\b(open|opens|opening|accept|accepting|begin|begins|start|starts|available|launch)/i;
@@ -123,21 +148,22 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
     const email = await PostalMime.parse(message.raw);
     const subject = email.subject ?? "";
     const text = email.text ?? (email.html ?? "").replace(/<[^>]+>/g, " ");
-    if (!isRelevant(subject, text)) return { action: "forwarded", reason: "not relevant" };
+    const category = classifyAnnouncement(subject, text);
+    if (!category) return { action: "forwarded", reason: "not relevant" };
 
     const receivedAt = Date.now();
     const openAt = parseOpenAt(subject, text, receivedAt);
     const row = await env.DB.prepare(
-      `INSERT INTO announcements (announcer, subject, received_at, open_at) VALUES (?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO announcements (announcer, subject, received_at, open_at, category) VALUES (?, ?, ?, ?, ?) RETURNING id`,
     )
-      .bind(announcer.name, subject.slice(0, 300), receivedAt, openAt)
+      .bind(announcer.name, subject.slice(0, 300), receivedAt, openAt, category)
       .first<{ id: number }>();
     const id = row!.id;
 
     await enqueue(env, [
       {
         kind: "push",
-        title: `${announcer.name}: single-role EMT opening announced - ${openAt ? `opens ${fmtPT(openAt)}` : "date not stated"}`,
+        title: `${announcer.name}: ${categoryNoun(category)} opening announced - ${openAt ? `opens ${fmtPT(openAt)}` : "date not stated"}`,
         body: subject,
         priority: 1,
         dedupeKey: `announce:${id}`,
@@ -154,7 +180,7 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
     );
     await claimAndNotify(env, found, receivedAt);
 
-    return { action: "watching", id, openAt };
+    return { action: "watching", id, openAt, category };
   } catch (e) {
     console.error(`announce@ from ${message.from}: ${(e as Error)?.message ?? e}`);
     return { action: "forwarded", reason: "error", error: String((e as Error)?.message ?? e) };

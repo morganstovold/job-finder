@@ -30,7 +30,11 @@ let hits: Record<string, number[]> = {};
 let falckDown = true;
 let gmrJobs: any[] = [];
 let minute = 0;
-const hit = (board: string) => (hits[board] ??= []).push(minute);
+// One entry per minute, however many requests a board makes per check.
+const hit = (board: string) => {
+  const ticks = (hits[board] ??= []);
+  if (ticks.at(-1) !== minute) ticks.push(minute);
+};
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string) => {
@@ -110,7 +114,7 @@ test("a new job alerts exactly once, even across overlapping runs", async () => 
   await tick(2);
   // One push (AMR = priority 2) + one email, enqueued once despite the overlapping runs.
   expect(queued.map((m) => [m.kind, m.title, m.priority])).toEqual([
-    ["push", "AMR: EMT - 911 Full Time", 2],
+    ["push", "EMT: AMR - EMT - 911 Full Time", 2],
     ["email", "New EMT job: EMT - 911 Full Time - AMR", 2],
   ]);
 });
@@ -187,4 +191,28 @@ test("if queueing the alert fails, the job is un-claimed and alerts on the next 
   env.NOTIFY = realNotify;
   await tick(1);
   expect(queued.filter((m) => m.kind === "push").map((m) => m.url)).toEqual(["https://careers.gmr.net/jobs/20"]);
+});
+
+test("a job gone 24h+ that comes back alerts again; gone an hour, it doesn't", async () => {
+  falckDown = false;
+  gmrJobs = [amrJob(30, "Concord", true)];
+  await tick(0);
+  const pushesFor30 = () => queued.filter((m) => m.kind === "push" && m.url.endsWith("/30")).length;
+  expect(pushesFor30()).toBe(1);
+
+  // Gone for an hour, back: same posting, no new alert.
+  gmrJobs = [amrJob(31, "Concord", true)];
+  await tick(1);
+  gmrJobs = [amrJob(30, "Concord", true), amrJob(31, "Concord", true)];
+  await tick(61);
+  expect(pushesFor30()).toBe(1);
+
+  // Gone for 2 days, back (a reposted recruitment): alerts again, with a fresh first_seen.
+  gmrJobs = [amrJob(31, "Concord", true)];
+  await tick(62);
+  gmrJobs = [amrJob(30, "Concord", true), amrJob(31, "Concord", true)];
+  await tick(61 + 2 * 24 * 60);
+  expect(pushesFor30()).toBe(2);
+  const keys = queued.filter((m) => m.kind === "push" && m.url.endsWith("/30")).map((m) => m.dedupeKey);
+  expect(new Set(keys).size).toBe(2); // distinct dedupe keys, so the queue doesn't skip the re-alert
 });

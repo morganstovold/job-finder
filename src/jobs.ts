@@ -1,11 +1,14 @@
 import type { WorkerEnv } from "../alchemy.run.ts";
 import { ANNOUNCERS } from "./config.ts";
-import { isMatch } from "./filter.ts";
+import { categorize } from "./filter.ts";
 import { enqueue, jobMessages } from "./notify.ts";
 import type { Job } from "./types.ts";
 
 /** "Still listed" timestamps only need refreshing this often (saves D1 writes at one run a minute). */
 export const TOUCH_EVERY_MS = 10 * 60_000;
+
+/** A job that disappears for this long and comes back is alerted again. */
+const REALERT_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export interface AnnouncementRow {
   id: number;
@@ -13,6 +16,7 @@ export interface AnnouncementRow {
   subject: string;
   received_at: number;
   open_at: number | null;
+  category: "emt" | "ff";
   status: "watching" | "confirmed" | "expired";
   job_id: string | null;
 }
@@ -46,19 +50,35 @@ export async function confirmAnnouncement(env: WorkerEnv, row: AnnouncementRow, 
 export async function claimAndNotify(env: WorkerEnv, jobs: Job[], now: number, extra: D1PreparedStatement[] = []) {
   // The same posting can show up on two boards (e.g. SFFD on SmartRecruiters + CalOpps) - those have
   // different ids, which is fine: you'd rather hear twice than miss one.
-  const unique = [...new Map(jobs.filter(isMatch).map((j) => [j.id, j])).values()];
+  const matched = jobs.map(categorize).filter((j) => j !== null);
+  const unique = [...new Map(matched.map((j) => [j.id, j])).values()];
 
-  // Claim new jobs atomically: INSERT … DO NOTHING RETURNING only returns a row to the run that actually
-  // inserted it, so two overlapping runs (a slow board at one run a minute) can't both alert the same job.
+  // Claim new jobs atomically: INSERT … RETURNING only returns a row to the run that actually inserted
+  // (or revived) it, so two overlapping runs (a slow board at one run a minute) can't both alert one job.
+  // Re-alert rule: a job unseen for 24h+ that shows up again (a reposted recruitment, same id) counts
+  // as new - first_seen resets and it alerts again.
   const claim = env.DB.prepare(
-    `INSERT INTO jobs (id, source, title, employer, location, url, posted_at, detail, first_seen, last_seen)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
-     ON CONFLICT (id) DO NOTHING RETURNING id`,
+    `INSERT INTO jobs (id, source, title, employer, location, url, posted_at, detail, first_seen, last_seen, category)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)
+     ON CONFLICT (id) DO UPDATE SET first_seen = ?9, last_seen = ?9, title = ?3, url = ?6, category = ?10
+       WHERE jobs.last_seen < ?9 - ${REALERT_AFTER_MS}
+     RETURNING id`,
   );
   const touch = env.DB.prepare(`UPDATE jobs SET last_seen = ?2, title = ?3, url = ?4 WHERE id = ?1 AND last_seen < ?5`);
   const statements = [
     ...unique.map((j) =>
-      claim.bind(j.id, j.source, j.title, j.employer, j.location, j.url, j.postedAt ?? null, j.detail ?? null, now),
+      claim.bind(
+        j.id,
+        j.source,
+        j.title,
+        j.employer,
+        j.location,
+        j.url,
+        j.postedAt ?? null,
+        j.detail ?? null,
+        now,
+        j.category,
+      ),
     ),
     ...unique.map((j) => touch.bind(j.id, now, j.title, j.url, now - TOUCH_EVERY_MS)),
     ...extra,
@@ -68,8 +88,11 @@ export async function claimAndNotify(env: WorkerEnv, jobs: Job[], now: number, e
   if (!fresh.length) return { unique, fresh };
 
   const watching = await watchingAnnouncements(env);
+  // A fresh job confirms an announcement only if it's on that agency's board and the same kind of job.
   const announcementFor = (j: Job) =>
-    watching.find((a) => ANNOUNCERS.find((x) => x.name === a.announcer)?.sources.includes(j.source));
+    watching.find(
+      (a) => a.category === j.category && ANNOUNCERS.find((x) => x.name === a.announcer)?.sources.includes(j.source),
+    );
   const opened = fresh.filter(announcementFor);
   const regular = fresh.filter((j) => !announcementFor(j));
 
@@ -77,8 +100,8 @@ export async function claimAndNotify(env: WorkerEnv, jobs: Job[], now: number, e
   // instead of them being marked seen with no alert ever sent.
   try {
     await enqueue(env, [
-      ...jobMessages(regular),
-      ...jobMessages(opened, { priority: () => 2, prefix: () => "OPEN NOW - " }),
+      ...jobMessages(regular, { claimedAt: now }),
+      ...jobMessages(opened, { priority: () => 2, prefix: "OPEN NOW - ", claimedAt: now }),
     ]);
   } catch (e) {
     await env.DB.prepare(`DELETE FROM jobs WHERE id IN (SELECT value FROM json_each(?))`)

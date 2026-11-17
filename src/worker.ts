@@ -169,13 +169,13 @@ async function dashboard(env: WorkerEnv) {
   const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>EMT Job Watch</title>
 <style>body{font:15px system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;color:#111;background:#fff}
 @media(prefers-color-scheme:dark){body{color:#eee;background:#111}a{color:#8ab4ff}}
-.j{padding:10px 0;border-top:1px solid #8884}.m{color:#888;font-size:13px}.gone{opacity:.45}</style>
-<h1>EMT Job Watch</h1><p class=m>EMT-B jobs within ${HOME.radiusMiles} mi of ${HOME.label}. Faded = no longer listed.</p>
+.j{padding:10px 0;border-top:1px solid #8884}.tag{font-size:11px;font-weight:600;padding:1px 6px;border-radius:4px;background:#2563eb22;color:#2563eb}.tag.ff{background:#dc262622;color:#dc2626}.m{color:#888;font-size:13px}.gone{opacity:.45}</style>
+<h1>EMT Job Watch</h1><p class=m>EMT-B jobs and firefighter trainee/recruit openings within ${HOME.radiusMiles} mi of ${HOME.label}. Faded = no longer listed.</p>
 ${announcementsHtml}${
     jobs
       .map(
         (j: any) => `<div class="j ${Date.now() - j.last_seen > 60 * 60 * 1000 ? "gone" : ""}">
-<a href="${esc(j.url)}"><b>${esc(j.title)}</b></a><br>${esc([j.employer, j.location].filter(Boolean).join(" - "))}
+<span class="tag ${j.category}">${j.category === "ff" ? "FF Recruit" : "EMT"}</span> <a href="${esc(j.url)}"><b>${esc(j.title)}</b></a><br>${esc([j.employer, j.location].filter(Boolean).join(" - "))}
 <div class=m>${esc([j.detail, `found ${new Date(j.first_seen).toLocaleString("en-US", { timeZone: "America/Los_Angeles" })}`, j.source].filter(Boolean).join(" · "))}</div></div>`,
       )
       .join("") || "<p>No matches yet.</p>"

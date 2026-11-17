@@ -180,3 +180,27 @@ test("a failed last attempt is logged and acked, not retried forever", async () 
   await handleNotifyBatch(dead.batch, env());
   expect(dead.log).toEqual(["ack"]);
 });
+
+test("email subject and push labels follow the job category", async () => {
+  const { jobMessages } = await import("./notify.ts");
+  const emt = { id: "a", source: "x", title: "EMT", employer: "AMR", location: "", url: "u", category: "emt" as const };
+  const ff = {
+    id: "b",
+    source: "x",
+    title: "Fire Recruit",
+    employer: "ConFire",
+    location: "",
+    url: "u",
+    category: "ff" as const,
+  };
+  const subject = (jobs: any[]) => jobMessages(jobs).find((m) => m.kind === "email")!.title;
+  expect(subject([emt])).toBe("New EMT job: EMT - AMR");
+  expect(subject([ff])).toBe("New firefighter recruit opening: Fire Recruit - ConFire");
+  expect(subject([ff, { ...ff, id: "c" }])).toBe("2 new firefighter recruit openings near Benicia, CA");
+  expect(subject([emt, ff])).toBe("2 new jobs (EMT + FF recruit)");
+  expect(
+    jobMessages([emt, ff])
+      .filter((m) => m.kind === "push")
+      .map((m) => m.title),
+  ).toEqual(["EMT: AMR - EMT", "FF Recruit: ConFire - Fire Recruit"]);
+});

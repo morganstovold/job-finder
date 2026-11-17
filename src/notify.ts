@@ -52,19 +52,45 @@ const hash = (s: string) => {
 export const priorityOf = (job: Job): Priority => SOURCES.find((s) => s.name === job.source)?.priority ?? 1;
 
 /** Messages for newly found jobs: one push each (at its source's priority) plus one summary email. */
-export function jobMessages(jobs: Job[], opts: { priority?: (j: Job) => Priority; prefix?: (j: Job) => string } = {}) {
+export const CATEGORY_LABEL = { emt: "EMT", ff: "FF Recruit" } as const;
+
+const label = (j: Job) => CATEGORY_LABEL[j.category ?? "emt"];
+
+const subjectFor = (jobs: Job[], prefix?: string) => {
+  const cats = new Set(jobs.map((j) => j.category ?? "emt"));
+  if (jobs.length === 1) {
+    const [j] = jobs;
+    const noun = j.category === "ff" ? "New firefighter recruit opening" : "New EMT job";
+    return `${prefix ?? `${noun}: `}${j.title} - ${j.employer}`;
+  }
+  const what =
+    cats.size > 1
+      ? `${jobs.length} new jobs (EMT + FF recruit)`
+      : cats.has("ff")
+        ? `${jobs.length} new firefighter recruit openings near ${HOME.label}`
+        : `${jobs.length} new EMT jobs near ${HOME.label}`;
+  return `${prefix ?? ""}${what}`;
+};
+
+/**
+ * Messages for newly found jobs: one push each (at its source's priority) plus one summary email.
+ * `claimedAt` goes into the dedupe keys, so a job re-alerted after a 24h absence isn't skipped as a repeat.
+ */
+export function jobMessages(
+  jobs: Job[],
+  opts: { priority?: (j: Job) => Priority; prefix?: string; claimedAt?: number } = {},
+) {
   if (!jobs.length) return [];
   const priority = opts.priority ?? priorityOf;
-  const title = (j: Job) => `${opts.prefix?.(j) ?? ""}${j.title}`;
-  const subject =
-    jobs.length === 1
-      ? `${opts.prefix?.(jobs[0]) ?? "New EMT job: "}${jobs[0].title} - ${jobs[0].employer}`
-      : `${jobs.length} new EMT jobs near ${HOME.label}`;
+  const title = (j: Job) => `${opts.prefix ?? ""}${j.title}`;
+  const subject = subjectFor(jobs, opts.prefix);
+  const keySuffix = `${opts.prefix ? ":open" : ""}${opts.claimedAt ? `:${opts.claimedAt}` : ""}`;
   const html = `<div style="font-family:system-ui,sans-serif;max-width:600px">
   <h2 style="margin:0 0 12px">${esc(subject)}</h2>
   ${jobs
     .map(
       (j) => `<div style="padding:12px 0;border-top:1px solid #ddd">
+    <span style="font-size:12px;font-weight:600;color:#555">${esc(label(j))}</span><br>
     <a href="${esc(j.url)}" style="font-size:17px;font-weight:600">${esc(title(j))}</a><br>
     <span>${esc([j.employer, j.location].filter(Boolean).join(" - "))}</span><br>
     <span style="color:#666;font-size:13px">${esc([j.detail, j.postedAt && `posted ${j.postedAt.slice(0, 10)}`, `via ${j.source}`].filter(Boolean).join(" · "))}</span>
@@ -76,20 +102,20 @@ export function jobMessages(jobs: Job[], opts: { priority?: (j: Job) => Priority
   return [
     ...jobs.slice(0, 10).map((j): NotifyMessage => ({
       kind: "push",
-      title: `${j.employer}: ${title(j)}`,
+      title: `${opts.prefix ?? ""}${label(j)}: ${j.employer} - ${j.title}`,
       body: [j.location, j.detail].filter(Boolean).join(" · "),
       url: j.url,
       urlTitle: "Apply",
       priority: priority(j),
-      dedupeKey: `push:${opts.prefix ? "open:" : ""}${j.id}`,
+      dedupeKey: `push:${j.id}${keySuffix}`,
     })),
     {
       kind: "email",
       title: subject,
-      body: jobs.map((j) => `${line(j)}\n${j.url}`).join("\n\n"),
+      body: jobs.map((j) => `[${label(j)}] ${line(j)}\n${j.url}`).join("\n\n"),
       html,
       priority: jobs.some((j) => priority(j) === 2) ? 2 : 1,
-      dedupeKey: `email:${opts.prefix ? "open:" : ""}${hash(ids)}:${jobs.length}`,
+      dedupeKey: `email:${hash(ids)}:${jobs.length}${keySuffix}`,
     } satisfies NotifyMessage,
   ];
 }

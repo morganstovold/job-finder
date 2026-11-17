@@ -1,7 +1,7 @@
 // The steps of AnnouncementWorkflow, kept free of `cloudflare:workers` so they can be tested with a fake
 // `step`. Each step.do is idempotent: it reads the row first, and reminders carry a dedupe key.
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { fmtPT } from "./announce.ts";
+import { categoryNoun, fmtPT } from "./announce.ts";
 import { EMERGENCY_WITHIN_MIN, REMINDERS_MIN } from "./config.ts";
 import type { AnnouncementRow } from "./jobs.ts";
 import { enqueue } from "./notify.ts";
@@ -49,7 +49,7 @@ async function remind(env: WorkerEnv, id: number, minutes: number) {
   await enqueue(env, [
     {
       kind: "push",
-      title: `${row.announcer}: single-role EMT opens in ${inWords(minutes)} (${fmtPT(row.open_at)}) - ${urgent ? "get ready to apply" : "application ready?"}`,
+      title: `${row.announcer}: ${categoryNoun(row.category)} opens in ${inWords(minutes)} (${fmtPT(row.open_at)}) - ${urgent ? "get ready to apply" : "application ready?"}`,
       body: row.subject,
       priority: urgent ? 2 : 1,
       dedupeKey: `remind:${id}:${minutes}m`,

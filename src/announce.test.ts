@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 
 import { type Step, watchAnnouncement } from "./announce-watch.ts";
-import { findAnnouncer, handleAnnouncementEmail, isRelevant, parseOpenAt } from "./announce.ts";
+import { classifyAnnouncement, findAnnouncer, handleAnnouncementEmail, parseOpenAt } from "./announce.ts";
 import { claimAndNotify } from "./jobs.ts";
 import { memoryD1 } from "./testing/d1.ts";
 
@@ -38,11 +38,16 @@ test("no stated date, past dates, and non-opening dates give null", () => {
   expect(parseOpenAt("", "The filing deadline is 12/1/2026. Sent 11/10/2026.", RECEIVED)).toBeNull();
 });
 
-test("relevance: EMT/single-role announcements pass, paramedic recruits don't", () => {
-  expect(isRelevant("Single Role EMT recruitment opening soon", "")).toBe(true);
-  expect(isRelevant("Sacramento Fire hiring update", "We are hiring Emergency Medical Technicians.")).toBe(true);
-  expect(isRelevant("EMS Trainee program", "")).toBe(true);
-  expect(isRelevant("Fire Recruit Paramedic", "Fire Recruit (Paramedic) applications open 12/1.")).toBe(false);
+test("announcement category: single-role EMT, firefighter recruit, or not relevant", () => {
+  expect(classifyAnnouncement("Single Role EMT recruitment opening soon", "")).toBe("emt");
+  expect(classifyAnnouncement("EMS Trainee program", "")).toBe("emt");
+  expect(classifyAnnouncement("Hiring update", "Our Fire Service EMT recruitment opens 12/1.")).toBe("emt");
+  expect(classifyAnnouncement("Firefighter Recruit recruitment", "Applications open 12/1.")).toBe("ff");
+  expect(classifyAnnouncement("Hiring update", "The Fire Recruit (EMT) recruitment opens 12/1.")).toBe("ff");
+  expect(classifyAnnouncement("Fire Recruit Paramedic", "Fire Recruit (Paramedic) applications open 12/1.")).toBeNull();
+  expect(classifyAnnouncement("Hiring update", "Lateral Firefighter Recruit applications open 12/1.")).toBeNull();
+  // Plain "EMT" in the body isn't enough: every firefighter posting says this.
+  expect(classifyAnnouncement("Hiring update", "EMT certification required. Apply by 12/1.")).toBeNull();
 });
 
 test("sender allowlist", () => {
@@ -147,7 +152,7 @@ test("if the posting is already live, the email confirms it right away at priori
     [1, "Sac City Fire: single-role EMT opening announced - date not stated", ""],
     [
       2,
-      "Sac City Fire: OPEN NOW - Sacramento Fire Emergency Medical Technician",
+      "OPEN NOW - EMT: Sac City Fire - Sacramento Fire Emergency Medical Technician",
       "https://www.governmentjobs.com/careers/saccity/jobs/777/x",
     ],
   ]);
@@ -165,7 +170,7 @@ test("a cron-found job from another board doesn't confirm a Sac City announcemen
     [{ id: "gmr:1", source: "AMR / GMR", title: "EMT", employer: "AMR", location: "Concord", url: "u" }],
     Date.now(),
   );
-  expect(queued.find((m) => m.kind === "push").title).toBe("AMR: EMT");
+  expect(queued.find((m) => m.kind === "push").title).toBe("EMT: AMR - EMT");
   expect(workflows.events).toEqual([]);
 });
 
@@ -270,4 +275,27 @@ test("errors after forwarding are logged, not thrown (a bounce could unsubscribe
   );
   expect(forwarded).toEqual(["me@example.com"]);
   expect(result).toMatchObject({ action: "forwarded", reason: "error", error: "queue down" });
+});
+
+test("a firefighter recruit announcement is stored as ff and only an ff posting confirms it", async () => {
+  sacJobs = [
+    { id: 801, title: "Sacramento Fire Emergency Medical Technician" },
+    { id: 802, title: "Fire Recruit (EMT)" },
+  ];
+  const result = await handleAnnouncementEmail(
+    email("hr@cityofsacramento.org", "Fire Recruit Recruitment", "Fire Recruit applications are open now."),
+    env(),
+  );
+  expect(result).toMatchObject({ action: "watching", category: "ff" });
+  const pushes = queued.filter((m) => m.kind === "push").map((m) => m.title);
+  expect(pushes).toEqual([
+    "Sac City Fire: Fire Recruit opening announced - date not stated",
+    "EMT: Sac City Fire - Sacramento Fire Emergency Medical Technician", // not the announced kind: normal alert
+    "OPEN NOW - FF Recruit: Sac City Fire - Fire Recruit (EMT)",
+  ]);
+  expect(db.sqlite.query(`SELECT category, status, job_id FROM announcements`).get()).toEqual({
+    category: "ff",
+    status: "confirmed",
+    job_id: "neogov:802",
+  });
 });

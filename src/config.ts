@@ -13,7 +13,7 @@ export const HOME = {
 export const TITLE_INCLUDE: RegExp[] = [
   /\bE\.?M\.?T\b/i,
   /emergency medical tech/i,
-  /\bH-?0?03\b/i, // SFFD H-3 "EMT & Paramedic" class
+  /\bH-?0{0,2}3\b/i, // SFFD H-3 (also "H003") "EMT & Paramedic" class
   /\bEMS\b.*trainee|emergency medical services trainee/i, // Sac Fire's internal single-role title
   /ambulance (attendant|operator)/i,
 ];
@@ -32,8 +32,23 @@ export const TITLE_EXCLUDE: RegExp[] = [
  */
 export const IFT_EXCLUDE = /\bIFT\b|inter-?facility|non-?emergency|wheelchair|gurney/i;
 
-/** Firefighter/EMT titles are skipped unless they match this, e.g. "EMT (Non-Safety)". */
+/** Firefighter/EMT titles only count as EMT jobs if they match this, e.g. "EMT (Non-Safety)". */
 export const FIREFIGHTER_OK = /single[- ]role|non[- ]safety/i;
+
+/**
+ * Entry-level firefighter jobs where the department runs its own academy ("ff" category). You're on
+ * FCTC's Statewide Eligibility List (written + CPAT) but not an academy graduate or a paramedic.
+ * H-2 is SFFD's entry-level Firefighter class (SFFD runs the academy).
+ *
+ * Plain "Firefighter" or "Firefighter/EMT" with no trainee/recruit wording is deliberately NOT
+ * included: those usually require a completed academy (Firefighter I).
+ */
+export const FF_TRAINEE_INCLUDE =
+  /fire ?fighter[\s/-]*(trainee|recruit)|fire recruit|recruit fire ?fighter|fire ?fighter[\s(-]*(entry[- ]level)|probationary fire ?fighter|\bH-?0{0,2}2\b/i;
+
+/** …minus these. Paramedic-only titles are handled in filter.ts (paramedic without EMT = skip). */
+export const FF_TRAINEE_EXCLUDE =
+  /lateral|engineer|captain|apparatus|chief|inspector|marshal|reserve|volunteer|seasonal|instructor/i;
 
 export type SourceConfig = {
   name: string;
@@ -56,9 +71,10 @@ export type SourceConfig = {
   | { kind: "gmr"; name: string; brands?: string[] }
   | { kind: "onshift"; name: string; tenant: string }
   | { kind: "neogov"; name: string; keywords: string[]; distanceMiles: number }
-  | { kind: "smartrecruiters"; name: string; company: string; query: string }
+  | { kind: "smartrecruiters"; name: string; company: string; queries: string[] }
   | { kind: "calopps"; name: string; keywords: string[] }
   | { kind: "neogovAgency"; name: string; agency: string }
+  | { kind: "fctc"; name: string }
 );
 
 /**
@@ -75,6 +91,9 @@ const FIRE_AGENCIES: Record<string, { name: string; expectNonEmpty?: boolean }> 
   mofd: { name: "Moraga-Orinda Fire" },
   paloaltoca: { name: "Palo Alto Fire" },
   folsom: { name: "Folsom Fire" },
+  // No single-role EMT program, but they hire firefighter recruits/trainees.
+  confire: { name: "ConFire" },
+  cosumnescsd: { name: "Cosumnes Fire" },
 };
 
 // 911 employers only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic, NorCal,
@@ -93,7 +112,7 @@ export const SOURCES: SourceConfig[] = [
     kind: "neogov",
     name: "GovernmentJobs",
     // The agency pages below are the fast path; this search is the wide net, so every 5 min.
-    keywords: ["EMT", "emergency medical technician"],
+    keywords: ["EMT", "emergency medical technician", "firefighter trainee", "fire recruit", "firefighter recruit"],
     distanceMiles: 75,
     everyMinutes: 5,
   },
@@ -102,11 +121,12 @@ export const SOURCES: SourceConfig[] = [
     kind: "smartrecruiters",
     name: "City of SF",
     company: "CityAndCountyOfSanFrancisco1",
-    query: "EMT",
+    // "Firefighter" catches SFFD's H-2 entry-level class.
+    queries: ["EMT", "Firefighter"],
   },
   // Smaller agencies (Benicia, Moraga-Orinda, Pacifica, San Bruno…) use CalOpps.
   // Also rate-limits occasionally. One keyword: CalOpps' "EMT" search also matches the spelled-out title.
-  { kind: "calopps", name: "CalOpps", keywords: ["EMT"], everyMinutes: 5 },
+  { kind: "calopps", name: "CalOpps", keywords: ["EMT", "firefighter"], everyMinutes: 5 },
   ...Object.entries(FIRE_AGENCIES).map(([agency, { name, expectNonEmpty }]) => ({
     kind: "neogovAgency" as const,
     name,
@@ -114,6 +134,10 @@ export const SOURCES: SourceConfig[] = [
     priority: 2 as const,
     expectNonEmpty,
   })),
+  // Fire departments recruiting off FCTC's Statewide Eligibility List (you're on it). Mostly
+  // "Firefighter Trainee/Recruit" rows; paramedic-only rows are dropped by the filter. Recruitments
+  // stay open for days and the agency page / GovernmentJobs usually alert first, so priority 1.
+  { kind: "fctc", name: "FCTC", everyMinutes: 5 },
 ];
 
 /**
