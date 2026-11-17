@@ -141,7 +141,7 @@ export const SOURCES: SourceConfig[] = [
 ];
 
 /**
- * Agencies whose interest-list emails are forwarded to announce@stovold.dev. An announcement from one
+ * Agencies whose interest-list emails are forwarded to announce@morgannstovold.com. An announcement from one
  * of these is stored and watched: reminders before it opens, and an "OPEN NOW" emergency push when
  * one of its `sources` (SOURCES names) shows the posting. Adding another agency's list = one entry.
  */

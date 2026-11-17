@@ -5,8 +5,15 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
 const DOMAIN = "jobs.stovold.dev";
+/**
+ * Inbound announcement mail lives on morgannstovold.com, which has no other mail. NOT stovold.dev: its
+ * MX points at Google Workspace (morgan@stovold.dev), so mail sent there never reaches Cloudflare, and
+ * enabling Cloudflare Email Routing there would replace those MX records and break that inbox.
+ * (Outbound alerts still send fine from jobs@stovold.dev.)
+ */
+const ANNOUNCE_DOMAIN = "morgannstovold.com";
 /** Inbound address for agency interest-list emails ("applications open 11/16 at 12:01 AM"). */
-const ANNOUNCE_ADDRESS = "announce@stovold.dev";
+const ANNOUNCE_ADDRESS = `announce@${ANNOUNCE_DOMAIN}`;
 
 /**
  * Every outbound alert goes through `notify` (retried with backoff); messages that exhaust their
@@ -80,9 +87,12 @@ export default Alchemy.Stack(
       settings: { batchSize: 10, maxWaitTimeMs: 1000, maxRetries: 2 },
     });
     if ((yield* Alchemy.Stage) === "prod") {
-      // announce@stovold.dev -> this Worker's email() handler.
+      // Cloudflare Email Routing on ANNOUNCE_DOMAIN so it can receive announce@. Adds Cloudflare's
+      // MX/SPF records to morgannstovold.com (which had no mail records).
+      yield* Cloudflare.Email.Routing("AnnounceRouting", { zone: ANNOUNCE_DOMAIN });
+      // announce@morgannstovold.com -> this Worker's email() handler.
       yield* Cloudflare.Email.Rule("AnnounceRoute", {
-        zone: "stovold.dev",
+        zone: ANNOUNCE_DOMAIN,
         name: "EMT Job Watch announcements",
         matchers: [{ type: "literal", field: "to", value: ANNOUNCE_ADDRESS }],
         actions: [{ type: "worker", value: [worker.workerName] }],

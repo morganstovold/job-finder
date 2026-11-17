@@ -59,7 +59,8 @@ still gets checked every minute, since the board might really be empty.
 
 Sac Fire emails its interest list _before_ a posting exists ("single-role EMT" or "Fire Recruit"
 applications open 11/16 at 12:01 AM), sometimes months ahead. The scraper can't see a posting that isn't up yet, so
-those emails go to **`announce@stovold.dev`**, which Email Routing hands to this Worker:
+those emails go to **`announce@morgannstovold.com`**, which Cloudflare Email Routing hands to this Worker
+(it's on morgannstovold.com because stovold.dev's mail is Google Workspace; see Setup):
 
 1. The email is always forwarded to `NOTIFY_EMAIL` first (so you see "confirm your subscription"
    links, and nothing is lost if parsing fails).
@@ -106,17 +107,21 @@ skipped.
 
 ## Setup
 
-1. **Email.** In the Cloudflare dashboard, open stovold.dev → Email → Email Routing, make sure it's
-   enabled, and add the inbox you want alerts in under **Destination addresses**. Click the
-   verification link Cloudflare emails you. Sending is free.
+1. **Email.** In the Cloudflare dashboard (Email → Email Routing → **Destination addresses**), add the
+   inbox you want alerts in and click the verification link Cloudflare emails you. Alerts are sent
+   from `jobs@stovold.dev`. Sending is free.
+   **Don't enable Email Routing on stovold.dev itself:** its mail (morgan@stovold.dev) is Google
+   Workspace, and enabling routing there would replace its MX records. Inbound announcement mail uses
+   morgannstovold.com instead, which has no other mail.
 2. **Push (optional, the "SMS").** Install [Pushover](https://pushover.net) (iOS/Android, $5 one-time
    after a 30-day trial) and log in. Copy your **user key** from the Pushover dashboard, then create an
    application ("Create an Application/API Token") and copy its **API token**. Each alert links to the
    job's apply page, with a Dashboard link in the message. Alert priority is set per board (see above).
-3. **Announcements.** Deploying creates the `announce@stovold.dev` → Worker routing rule (prod only).
+3. **Announcements.** Deploying enables Email Routing on morgannstovold.com (adds Cloudflare's MX/SPF
+   records there) and creates the `announce@morgannstovold.com` → Worker rule (prod only).
    Sign up for Sac Fire's hiring alerts (on its
    [single-role EMT page](https://www.cityofsacramento.gov/fire/join-sacramento-fire/career-paths/ems-single-role))
-   with `announce@stovold.dev`, then click the confirmation link in the forwarded email. When the
+   with `announce@morgannstovold.com`, then click the confirmation link in the forwarded email. When the
    first real announcement arrives, check its sender and tighten `from` in `ANNOUNCERS` if needed.
 4. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `PUSHOVER_USER`, `PUSHOVER_TOKEN`, and `ADMIN_KEY`.
 5. Deploy:
