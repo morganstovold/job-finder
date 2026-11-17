@@ -26,12 +26,12 @@ you get one "scraper broken" alert.
 1. **Email.** In the Cloudflare dashboard, open stovold.dev → Email → Email Routing, make sure it's
    enabled, and add the inbox you want alerts in under **Destination addresses**. Click the
    verification link Cloudflare emails you. Sending is free.
-2. **Push (optional, the "SMS").** Install the [ntfy](https://ntfy.sh) app (iOS/Android) and
-   subscribe to a long random topic name, e.g. `morgan-emt-` followed by `openssl rand -hex 8`.
-   It's free, instant, and each alert opens the apply page when tapped.
-   Optionally create an access token (ntfy.sh → Account → Access tokens) and set `NTFY_TOKEN`.
-   Without one, ntfy rate-limits by IP, and Cloudflare Workers share IPs with everyone else's Workers.
-3. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `NTFY_TOPIC`, `NTFY_TOKEN`, and `ADMIN_KEY`.
+2. **Push (optional, the "SMS").** Install [Pushover](https://pushover.net) (iOS/Android, $5 one-time
+   after a 30-day trial) and log in. Copy your **user key** from the Pushover dashboard, then create an
+   application ("Create an Application/API Token") and copy its **API token**. Each alert links to the
+   job's apply page, with a Dashboard link in the message. Alerts use priority 1 (sounds even during
+   quiet hours); set `PUSH_PRIORITY = 2` in `src/notify.ts` to make them repeat until acknowledged.
+3. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `PUSHOVER_USER`, `PUSHOVER_TOKEN`, and `ADMIN_KEY`.
 4. Deploy:
 
    ```bash
@@ -64,6 +64,7 @@ Add an entry to `SOURCES` in `src/config.ts`:
 ## Why not SMS?
 
 Twilio costs about $1.15/mo for a number plus ~$0.01 per text, and US carriers now require A2P
-10DLC or toll-free verification (forms and a few days' wait) before texts deliver reliably. ntfy
-push arrives just as fast and costs nothing. If you still want real SMS later, it's one more
+10DLC or toll-free verification (forms and a few days' wait) before texts deliver reliably. A
+Pushover push arrives just as fast for a one-time $5. (ntfy was tried first, but ntfy.sh times out
+on requests from Cloudflare Workers.) If you still want real SMS later, it's one more
 function in `src/notify.ts`.

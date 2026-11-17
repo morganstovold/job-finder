@@ -23,10 +23,9 @@ export const Worker = Cloudflare.Worker(
         EMAIL: Cloudflare.Email.SendEmail("Email"),
         NOTIFY_EMAIL: Config.String("NOTIFY_EMAIL"),
         FROM_EMAIL: Config.String("FROM_EMAIL").pipe(Config.withDefault("jobs@stovold.dev")),
-        // Optional: push alerts through the free ntfy app. Leave empty to disable.
-        NTFY_TOPIC: Config.String("NTFY_TOPIC").pipe(Config.withDefault("")),
-        // Optional ntfy access token (tk_…): rate limits then apply to your account, not Cloudflare's shared IP.
-        NTFY_TOKEN: Config.Redacted("NTFY_TOKEN").pipe(Config.withDefault(Redacted.make(""))),
+        // Optional Pushover push alerts: app API token + your user key. Leave empty to disable.
+        PUSHOVER_TOKEN: Config.Redacted("PUSHOVER_TOKEN").pipe(Config.withDefault(Redacted.make(""))),
+        PUSHOVER_USER: Config.Redacted("PUSHOVER_USER").pipe(Config.withDefault(Redacted.make(""))),
         // Optional: enables /run?key=… and /test?key=…
         ADMIN_KEY: Config.String("ADMIN_KEY").pipe(Config.withDefault("")),
         // The worker's public URL - cron runs have no request to learn it from. Linked from push alerts.

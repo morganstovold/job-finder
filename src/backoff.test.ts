@@ -21,7 +21,8 @@ const env: any = {
   DB: { prepare: (sql: string) => stmt(sql), batch: async (s: any[]) => Promise.all(s.map((x) => x.run())) },
   EMAIL: { send: async () => ({}) },
   NOTIFY_EMAIL: "",
-  NTFY_TOPIC: "",
+  PUSHOVER_TOKEN: "",
+  PUSHOVER_USER: "",
 };
 
 // Falck always 403s; every other board answers with an empty result.

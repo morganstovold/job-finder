@@ -18,26 +18,31 @@ export async function sendEmail(env: WorkerEnv, subject: string, text: string, h
 }
 
 /**
- * Free push notification to the ntfy app (https://ntfy.sh) - the "SMS" channel.
- * Always max priority: lower priorities don't pop a notification on the phone.
- * Tapping opens `clickUrl` (the job), falling back to the dashboard; a "Dashboard" button is attached too.
+ * Pushover priority. 1 = high: always sounds, even during your Pushover quiet hours.
+ * 2 = emergency: repeats every 30s until you acknowledge it in the app (for 1h max).
  */
-export async function sendPush(env: WorkerEnv, title: string, message: string, clickUrl?: string) {
-  if (!env.NTFY_TOPIC) return;
-  const res = await fetch(`https://ntfy.sh/${env.NTFY_TOPIC}`, {
-    method: "POST",
-    body: message,
-    headers: {
-      // Header values must be ASCII.
-      Title: title.replace(/[^\x20-\x7e]/g, ""),
-      Priority: "max",
-      Tags: "ambulance",
-      ...(env.NTFY_TOKEN ? { Authorization: `Bearer ${env.NTFY_TOKEN}` } : {}),
-      ...(clickUrl || env.DASHBOARD_URL ? { Click: clickUrl || env.DASHBOARD_URL } : {}),
-      ...(env.DASHBOARD_URL ? { Actions: `view, Dashboard, ${env.DASHBOARD_URL}` } : {}),
-    },
+const PUSH_PRIORITY: 1 | 2 = 1;
+
+/**
+ * Push notification via Pushover (https://pushover.net) - the "SMS" channel.
+ * The notification's link is `url` (the job's apply page, or the dashboard when there isn't one);
+ * the message body also links the dashboard.
+ */
+export async function sendPush(env: WorkerEnv, title: string, message: string, url?: string, urlTitle = "Apply") {
+  if (!env.PUSHOVER_TOKEN || !env.PUSHOVER_USER) return;
+  const link = url || env.DASHBOARD_URL;
+  const body = new URLSearchParams({
+    token: env.PUSHOVER_TOKEN,
+    user: env.PUSHOVER_USER,
+    title: title.slice(0, 250),
+    message: `${esc(message)}\n\n<a href="${esc(env.DASHBOARD_URL)}">Dashboard</a>`.slice(0, 1024),
+    html: "1",
+    priority: String(PUSH_PRIORITY),
+    ...(PUSH_PRIORITY === 2 ? { retry: "30", expire: "3600" } : {}),
+    ...(link ? { url: link.slice(0, 512), url_title: url ? urlTitle : "Dashboard" } : {}),
   });
-  if (!res.ok) throw new Error(`ntfy ${res.status}: ${await res.text()}`);
+  const res = await fetch("https://api.pushover.net/1/messages.json", { method: "POST", body });
+  if (!res.ok) throw new Error(`pushover ${res.status}: ${await res.text()}`);
 }
 
 export async function notifyNewJobs(env: WorkerEnv, jobs: Job[]) {
