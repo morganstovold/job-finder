@@ -13,8 +13,6 @@ export interface AnnouncementRow {
   subject: string;
   received_at: number;
   open_at: number | null;
-  reminded_24h: number;
-  reminded_1h: number;
   status: "watching" | "confirmed" | "expired";
   job_id: string | null;
 }

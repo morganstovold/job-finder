@@ -184,37 +184,41 @@ const insertAnnouncement = (openAt: number | null) =>
     .query(`INSERT INTO announcements (announcer, subject, received_at, open_at) VALUES (?, ?, ?, ?) RETURNING id`)
     .get("Sac City Fire", "Single Role EMT", RECEIVED, openAt) as { id: number };
 
-test("workflow: 24h and 1h reminders, then confirmed", async () => {
+test("workflow: reminders at 24h, 3h, 30m and 5m, then confirmed", async () => {
   const { id } = insertAnnouncement(Date.parse("2026-11-16T08:01:00Z"));
   const { step, log } = fakeStep({ jobId: "neogov:5" });
   expect(await watchAnnouncement(env(), id, step)).toBe("confirmed");
   expect(log).toEqual([
     "do load",
-    "sleep until-24h 2026-11-15T08:01:00.000Z",
-    "do remind-24h=sent",
-    "sleep until-1h 2026-11-16T07:01:00.000Z",
-    "do remind-1h=sent",
+    "sleep until-1440m 2026-11-15T08:01:00.000Z",
+    "do remind-1440m=sent",
+    "sleep until-180m 2026-11-16T05:01:00.000Z",
+    "do remind-180m=sent",
+    "sleep until-30m 2026-11-16T07:31:00.000Z",
+    "do remind-30m=sent",
+    "sleep until-5m 2026-11-16T07:56:00.000Z",
+    "do remind-5m=sent",
     "wait posting-confirmed 30d",
     "do confirm=confirmed",
   ]);
-  expect(queued.map((m) => [m.priority, m.title])).toEqual([
-    [1, "Sac City Fire: single-role EMT opens Mon 11/16 12:01 AM - application ready?"],
-    [2, "Sac City Fire: single-role EMT opens Mon 11/16 12:01 AM - get ready to apply"],
+  expect(queued.map((m) => [m.priority, m.title, m.dedupeKey])).toEqual([
+    [1, "Sac City Fire: single-role EMT opens in 24 hours (Mon 11/16 12:01 AM) - application ready?", "remind:1:1440m"],
+    [1, "Sac City Fire: single-role EMT opens in 3 hours (Mon 11/16 12:01 AM) - application ready?", "remind:1:180m"],
+    [2, "Sac City Fire: single-role EMT opens in 30 minutes (Mon 11/16 12:01 AM) - get ready to apply", "remind:1:30m"],
+    [2, "Sac City Fire: single-role EMT opens in 5 minutes (Mon 11/16 12:01 AM) - get ready to apply", "remind:1:5m"],
   ]);
-  expect(db.sqlite.query(`SELECT status, job_id, reminded_24h, reminded_1h FROM announcements`).get()).toEqual({
+  expect(db.sqlite.query(`SELECT status, job_id FROM announcements`).get()).toEqual({
     status: "confirmed",
     job_id: "neogov:5",
-    reminded_24h: 1,
-    reminded_1h: 1,
   });
+});
 
-  // Steps are idempotent: a replayed reminder after the flag is set sends nothing.
-  queued = [];
-  const replay = fakeStep({ jobId: "neogov:5" });
-  db.sqlite.exec(`UPDATE announcements SET status = 'watching'`);
-  await watchAnnouncement(env(), id, replay.step);
-  expect(replay.log).toContain("do remind-24h=skipped");
-  expect(queued).toEqual([]);
+test("workflow: an email that arrives late only gets the reminders still ahead", async () => {
+  // Arrives 20 minutes before opening: only the 5-minute reminder is still in the future.
+  const { id } = insertAnnouncement(RECEIVED + 20 * 60_000);
+  const { step, log } = fakeStep({ jobId: "x" });
+  await watchAnnouncement(env(), id, step);
+  expect(log.filter((l) => l.startsWith("do remind"))).toEqual(["do remind-5m=sent"]);
 });
 
 test("workflow: no date stated waits 270 days, then expires", async () => {
@@ -230,20 +234,24 @@ test("workflow: confirmed while sleeping, so later reminders are skipped", async
   db.sqlite.exec(`UPDATE announcements SET status = 'confirmed', job_id = 'neogov:9' WHERE id = ${id}`);
   const { step, log } = fakeStep({ jobId: "neogov:9" });
   await watchAnnouncement(env(), id, step);
-  expect(log).toContain("do remind-24h=skipped");
-  expect(log).toContain("do remind-1h=skipped");
+  expect(log.filter((l) => l.startsWith("do remind"))).toEqual([
+    "do remind-1440m=skipped",
+    "do remind-180m=skipped",
+    "do remind-30m=skipped",
+    "do remind-5m=skipped",
+  ]);
   expect(queued).toEqual([]);
 });
 
-test("workflow: test offsets shorten the reminders (REMINDER_OFFSETS_MIN)", async () => {
+test("workflow: REMINDER_OFFSETS_MIN overrides the list (any order, any count)", async () => {
   const { id } = insertAnnouncement(RECEIVED + 2 * 3_600_000);
   const { step, log } = fakeStep({ jobId: "x" });
-  await watchAnnouncement({ ...env(), REMINDER_OFFSETS_MIN: "90,30" }, id, step);
-  expect(log.slice(0, 5)).toEqual([
-    "do load",
-    "sleep until-24h 2026-11-10T18:30:00.000Z",
-    "do remind-24h=sent",
-    "sleep until-1h 2026-11-10T19:30:00.000Z",
-    "do remind-1h=sent",
+  await watchAnnouncement({ ...env(), REMINDER_OFFSETS_MIN: "30,90,10" }, id, step);
+  expect(log.filter((l) => l.startsWith("sleep"))).toEqual([
+    "sleep until-90m 2026-11-10T18:30:00.000Z",
+    "sleep until-30m 2026-11-10T19:30:00.000Z",
+    "sleep until-10m 2026-11-10T19:50:00.000Z",
   ]);
+  // Priority 2 only within an hour of opening.
+  expect(queued.map((m) => m.priority)).toEqual([1, 2, 2]);
 });

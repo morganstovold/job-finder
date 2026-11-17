@@ -53,15 +53,18 @@ those emails go to **`announce@stovold.dev`**, which Email Routing hands to this
 3. You get a push right away: "Sac City Fire: single-role EMT opening announced - opens Mon 11/16
    12:01 AM" (or "date not stated").
 4. That agency's boards are checked immediately, in case the posting is already live.
-5. A durable Cloudflare Workflow per announcement then sleeps until **24h before** opening (push,
-   priority 1) and **1h before** (push, priority 2), and waits for the posting. When the per-minute
+5. A durable Cloudflare Workflow per announcement then pushes reminders at **24h, 3h, 30m and 5m
+   before** opening (`REMINDERS_MIN` in `src/config.ts`). The ones within an hour of opening are
+   priority 2 (repeat until acknowledged); the rest are priority 1. Reminders whose time had already
+   passed when the email arrived are skipped. Then it waits for the posting. When the per-minute
    scraper finds a new job on that agency's board, it's alerted as **"OPEN NOW -"** at priority 2 and
    the announcement is marked confirmed. With no date stated it's watched for 270 days; otherwise
    until 30 days after opening.
 
 Active announcements show at the top of the dashboard. To add another agency's list, add an entry to
-`ANNOUNCERS` with its sender pattern and the `SOURCES` names to watch. `REMINDER_OFFSETS_MIN`
-(default `1440,60`) shortens the reminders for testing, e.g. `90,30`.
+`ANNOUNCERS` with its sender pattern and the `SOURCES` names to watch. `REMINDER_OFFSETS_MIN` in
+`.env` overrides the reminder list (minutes before opening), e.g. `6,3,2,1` to test on an
+announcement a few minutes out.
 
 ### Alert priority and delivery
 

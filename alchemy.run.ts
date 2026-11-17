@@ -39,8 +39,8 @@ export const Worker = Cloudflare.Worker(
         ANNOUNCE_WF: Cloudflare.Workflow<{ announcementId: number }>("AnnouncementWorkflow", {
           className: "AnnouncementWorkflow",
         }),
-        // Test flag: reminder offsets in minutes before opening ("1440,60" = 24h and 1h).
-        REMINDER_OFFSETS_MIN: Config.String("REMINDER_OFFSETS_MIN").pipe(Config.withDefault("1440,60")),
+        // Optional override of REMINDERS_MIN (src/config.ts): minutes before opening, e.g. "1440,180,30,5".
+        REMINDER_OFFSETS_MIN: Config.String("REMINDER_OFFSETS_MIN").pipe(Config.withDefault("")),
         // Cloudflare Email Routing send_email binding - free; the recipient must be a
         // verified destination address on the account.
         EMAIL: Cloudflare.Email.SendEmail("Email"),

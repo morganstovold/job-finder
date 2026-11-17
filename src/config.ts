@@ -126,6 +126,13 @@ export interface Announcer {
   sources: string[];
 }
 
+/**
+ * Reminders before an announced opening, in minutes (24h, 3h, 30m, 5m). Ones within an hour of opening
+ * push at priority 2 (repeat until acknowledged). REMINDER_OFFSETS_MIN in .env overrides the list.
+ */
+export const REMINDERS_MIN = [1440, 180, 10];
+export const EMERGENCY_WITHIN_MIN = 60;
+
 export const ANNOUNCERS: Announcer[] = [
   {
     name: "Sac City Fire",

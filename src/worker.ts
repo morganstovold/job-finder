@@ -1,5 +1,5 @@
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { reminderOffsets } from "./announce-watch.ts";
+import { remindersFor } from "./announce-watch.ts";
 import { fmtPT, handleAnnouncementEmail } from "./announce.ts";
 import { HOME, SOURCES } from "./config.ts";
 import { type AnnouncementRow, claimAndNotify, TOUCH_EVERY_MS } from "./jobs.ts";
@@ -153,12 +153,10 @@ async function dashboard(env: WorkerEnv) {
       .bind(since)
       .all<AnnouncementRow>(),
   ]);
-  const { dayMs, hourMs } = reminderOffsets(env);
   const nextReminder = (a: AnnouncementRow) => {
-    if (a.status !== "watching" || !a.open_at) return "";
-    if (!a.reminded_24h && a.open_at - dayMs > a.received_at) return ` · reminder ${fmtPT(a.open_at - dayMs)}`;
-    if (!a.reminded_1h) return ` · reminder ${fmtPT(a.open_at - hourMs)}`;
-    return "";
+    if (a.status !== "watching") return "";
+    const next = remindersFor(env, a).find((r) => r.at > Date.now());
+    return next ? ` · next reminder ${fmtPT(next.at)}` : "";
   };
   const announcementsHtml = announcements.length
     ? `<h2>Announcements</h2>${announcements
