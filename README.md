@@ -1,29 +1,44 @@
 # EMT Job Watch
 
-A Cloudflare Worker that checks EMT job boards every minute and alerts you the moment a new
-**EMT-B** posting near Benicia shows up. It sends an email, plus an optional free push notification.
+A Cloudflare Worker that checks job boards every minute and alerts you the moment a new **EMT-B**
+job or **firefighter trainee/recruit** opening near Benicia shows up. It sends an email, plus an
+optional push notification.
 
 ## What it watches
 
 911 employers and fire agencies only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic,
 NorCal, LIFEwest, AlphaOne, West Coast Medical) are deliberately left out.
 
-| Board                           | Covers                                                                    | How                                                  |
-| ------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `careers.gmr.net` (iCIMS)       | AMR, CrowdRx, other GMR brands                                            | JSON API, filtered by coordinates (60 mi)            |
-| `falcknc.employ.onshift.com`    | Falck Northern California (Alameda 911)                                   | OnShift JSON API                                     |
-| governmentjobs.com agency pages | Sac City Fire, Sac Metro Fire, San Ramon Valley, Moraga-Orinda, Palo Alto | each agency's own board, newest first: the fast path |
-| governmentjobs.com search       | Any fire district or city within 75 mi                                    | site-wide search: the wide net, every 5 min          |
-| SmartRecruiters                 | City of SF, including SFFD H-3 EMT/Paramedic                              | public JSON API                                      |
-| CalOpps                         | Small agencies (Benicia, Pacifica, San Bruno…)                            | search page, filtered by place names                 |
+| Board                           | Covers                                                                                               | How                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `careers.gmr.net` (iCIMS)       | AMR, CrowdRx, other GMR brands                                                                       | JSON API, filtered by coordinates (60 mi)             |
+| `falcknc.employ.onshift.com`    | Falck Northern California (Alameda 911)                                                              | OnShift JSON API                                      |
+| governmentjobs.com agency pages | Sac City Fire, Sac Metro Fire, San Ramon Valley, Moraga-Orinda, Palo Alto, Folsom, ConFire, Cosumnes | each agency's own board, newest first: the fast path  |
+| governmentjobs.com search       | Any fire district or city within 75 mi (EMT + firefighter trainee/recruit keywords)                  | site-wide search: the wide net, every 5 min           |
+| SmartRecruiters                 | City of SF: SFFD H-3 EMT/Paramedic and H-2 entry-level Firefighter                                   | public JSON API                                       |
+| CalOpps                         | Small agencies (Benicia, Pacifica, San Bruno…)                                                       | EMT and firefighter searches, filtered by place names |
+| FCTC "Now Hiring"               | Departments recruiting off FCTC's Statewide Eligibility List                                         | public page, every 5 min, priority 1                  |
 
 Not covered: **King-American** (SF 911). Its Paycom job board only serves listings to a browser
 session, so subscribe with the **Create Job Alerts** button on
 [its board](https://phx.us-west.paycomonline.net/v4/ats/web.php/portal/AD91210A1A43DAB866B5F4021AC8657E/career-page).
 
-Only titles that look like EMT-B jobs count. That excludes paramedic-only jobs, AEMT, instructor and
-faculty roles, interns, IFT/interfacility postings, and Firefighter/EMT unless the title says
-single-role or non-safety. Tune this in [`src/config.ts`](src/config.ts) and check it with `bun test`.
+Each title is sorted into one of two categories, or skipped (`classifyTitle` in `src/filter.ts`,
+rules in [`src/config.ts`](src/config.ts), checked with `bun test`):
+
+- **EMT** (EMT-B jobs): excludes paramedic-only jobs, AEMT, instructor and faculty roles, interns,
+  event standby, and IFT/interfacility postings (unless the title also says 911). Firefighter titles
+  only count here if they say single-role or non-safety.
+- **FF Recruit** (entry-level firefighter where the department runs its own academy): Firefighter
+  Trainee / Recruit, Fire Recruit, Recruit Firefighter, Probationary Firefighter, Firefighter (Entry
+  Level), SFFD H-2. Skips lateral, engineer, captain, inspector, reserve, volunteer, seasonal, and
+  paramedic-only titles ("Fire Recruit (EMT/Paramedic)" counts; "Firefighter Recruit - Paramedic"
+  doesn't). Plain "Firefighter" or "Firefighter/EMT" stays skipped: those usually require a
+  completed academy.
+
+Alerts are labeled by category (push titles start with `EMT:` or `FF Recruit:`), and the dashboard
+tags each job. Recruit postings close at applicant caps too, so they get the same priority as EMT
+jobs from the same board.
 
 Postings can close fast (Sac City Fire's single-role EMT closed 14 minutes after opening at 250
 applicants; AMR in about 45), so AMR/GMR, the fire agency pages and SF are checked every minute.
@@ -33,32 +48,37 @@ own pace (1, 2, 4… min; 5, 10, 20… for 5-minute boards, max 60) and returns 
 success. D1 is only written when something changes, about 1,600 rows a day against the free tier's
 100k.
 
-Each job alerts **once**, the first time it's seen (tracked in D1). The first run after deploying
+Each job alerts **once**, the first time it's seen (tracked in D1). A job that disappears for 24h+
+and comes back (a reposted recruitment) alerts again. The first run after deploying
 emails everything currently open. If a board fails for 6+ hours (usually because the site changed),
-you get one "scraper broken" alert. AMR and the fire agency pages always have listings, so if one
+you get one "scraper broken" alert. AMR and Sac City Fire always have listings, so if one
 suddenly returns none, that counts as a failure too (a broken parser looks like an empty board). It
 still gets checked every minute, since the board might really be empty.
 
 ### Announcement emails (the early warning)
 
-Sac Fire emails its interest list _before_ a posting exists ("single-role EMT applications open
-11/16 at 12:01 AM"), sometimes months ahead. The scraper can't see a posting that isn't up yet, so
+Sac Fire emails its interest list _before_ a posting exists ("single-role EMT" or "Fire Recruit"
+applications open 11/16 at 12:01 AM), sometimes months ahead. The scraper can't see a posting that isn't up yet, so
 those emails go to **`announce@stovold.dev`**, which Email Routing hands to this Worker:
 
 1. The email is always forwarded to `NOTIFY_EMAIL` first (so you see "confirm your subscription"
    links, and nothing is lost if parsing fails).
-2. If the sender is in `ANNOUNCERS` (`src/config.ts`) and it's about an EMT / single-role / EMS
-   trainee opening, it's stored in D1 (`announcements`) with the opening date/time if one is stated
-   (read as Pacific time; a date with no time counts as midnight).
+2. If the sender is in `ANNOUNCERS` (`src/config.ts`), it's categorized like a job: the subject goes
+   through the title filter, then the body counts only on strong phrases ("single-role", "EMS
+   trainee", "Fire Service EMT" → EMT; "firefighter trainee/recruit", "fire recruit" → FF Recruit,
+   with the same paramedic-only and lateral excludes). A body that merely says "EMT certification
+   required" doesn't count. Matches are stored in D1 (`announcements`) with their category and the
+   opening date/time if one is stated (read as Pacific time; a date with no time counts as midnight;
+   dates after "through", "until", "closes", "deadline"… are closing dates and are ignored).
 3. You get a push right away: "Sac City Fire: single-role EMT opening announced - opens Mon 11/16
-   12:01 AM" (or "date not stated").
+   12:01 AM" (or "Fire Recruit opening announced", or "date not stated").
 4. That agency's boards are checked immediately, in case the posting is already live.
-5. A durable Cloudflare Workflow per announcement then pushes reminders at **24h, 3h, 30m and 5m
+5. A durable Cloudflare Workflow per announcement then pushes reminders at **24h, 3h and 10m
    before** opening (`REMINDERS_MIN` in `src/config.ts`). The ones within an hour of opening are
    priority 2 (repeat until acknowledged); the rest are priority 1. Reminders whose time had already
    passed when the email arrived are skipped. Then it waits for the posting. When the per-minute
-   scraper finds a new job on that agency's board, it's alerted as **"OPEN NOW -"** at priority 2 and
-   the announcement is marked confirmed. With no date stated it's watched for 270 days; otherwise
+   scraper finds a new job of the same category on that agency's board, it's alerted as **"OPEN NOW
+   -"** at priority 2 and the announcement is marked confirmed. With no date stated it's watched for 270 days; otherwise
    until 30 days after opening.
 
 Active announcements show at the top of the dashboard. To add another agency's list, add an entry to

@@ -1,7 +1,7 @@
 // The steps of AnnouncementWorkflow, kept free of `cloudflare:workers` so they can be tested with a fake
 // `step`. Each step.do is idempotent: it reads the row first, and reminders carry a dedupe key.
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { fmtPT } from "./announce.ts";
+import { categoryNoun, fmtPT } from "./announce.ts";
 import { EMERGENCY_WITHIN_MIN, REMINDERS_MIN } from "./config.ts";
 import type { AnnouncementRow } from "./jobs.ts";
 import { enqueue } from "./notify.ts";
@@ -49,7 +49,7 @@ async function remind(env: WorkerEnv, id: number, minutes: number) {
   await enqueue(env, [
     {
       kind: "push",
-      title: `${row.announcer}: single-role EMT opens in ${inWords(minutes)} (${fmtPT(row.open_at)}) - ${urgent ? "get ready to apply" : "application ready?"}`,
+      title: `${row.announcer}: ${categoryNoun(row.category)} opens in ${inWords(minutes)} (${fmtPT(row.open_at)}) - ${urgent ? "get ready to apply" : "application ready?"}`,
       body: row.subject,
       priority: urgent ? 2 : 1,
       dedupeKey: `remind:${id}:${minutes}m`,
@@ -73,7 +73,8 @@ export async function watchAnnouncement(env: WorkerEnv, id: number, step: Step) 
     await step.do(`remind-${r.minutes}m`, () => remind(env, id, r.minutes));
   }
 
-  // Measured from when the wait starts: the last reminder, or receipt.
+  // Measured from when the wait starts: the last reminder, or receipt. Cloudflare allows waitForEvent
+  // timeouts and sleeps up to 365 days, so the longest wait (270 days, no date stated) is one step.
   const start = reminders.at(-1)?.at ?? row.received_at;
   const timeout = row.open_at ? row.open_at + 30 * DAY_MS - start : 270 * DAY_MS;
   try {

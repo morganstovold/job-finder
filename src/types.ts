@@ -12,4 +12,6 @@ export interface Job {
   lng?: number;
   /** Extra detail shown in the alert (pay, shift type…). */
   detail?: string;
+  /** Set by the filter, not the scrapers: EMT-B job or firefighter trainee/recruit. */
+  category?: "emt" | "ff";
 }

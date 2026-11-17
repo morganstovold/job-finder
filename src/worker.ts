@@ -1,8 +1,8 @@
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { remindersFor } from "./announce-watch.ts";
-import { fmtPT, handleAnnouncementEmail } from "./announce.ts";
+import { handleAnnouncementEmail } from "./announce.ts";
 import { HOME, SOURCES } from "./config.ts";
-import { type AnnouncementRow, claimAndNotify, TOUCH_EVERY_MS } from "./jobs.ts";
+import { dashboard } from "./dashboard.ts";
+import { claimAndNotify, TOUCH_EVERY_MS } from "./jobs.ts";
 import { enqueue, handleNotifyBatch, jobMessages, type NotifyMessage } from "./notify.ts";
 import { fetchSource } from "./sources.ts";
 import type { Job } from "./types.ts";
@@ -136,57 +136,6 @@ async function run(env: WorkerEnv, { manual = false } = {}) {
   const summary = { matches: unique.length, new: fresh.map((j) => `${j.employer}: ${j.title}`), broken };
   console.log(JSON.stringify(summary));
   return summary;
-}
-
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-
-const ago = (t?: number | null) => (t ? `${Math.round((Date.now() - t) / 60000)} min ago` : "never");
-
-async function dashboard(env: WorkerEnv) {
-  const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const [{ results: jobs }, { results: status }, { results: announcements }] = await Promise.all([
-    env.DB.prepare(`SELECT * FROM jobs WHERE last_seen > ? ORDER BY first_seen DESC LIMIT 100`).bind(since).all<any>(),
-    env.DB.prepare(`SELECT * FROM source_status ORDER BY source`).all<any>(),
-    env.DB.prepare(
-      `SELECT * FROM announcements WHERE status = 'watching' OR received_at > ? ORDER BY received_at DESC LIMIT 10`,
-    )
-      .bind(since)
-      .all<AnnouncementRow>(),
-  ]);
-  const nextReminder = (a: AnnouncementRow) => {
-    if (a.status !== "watching") return "";
-    const next = remindersFor(env, a).find((r) => r.at > Date.now());
-    return next ? ` · next reminder ${fmtPT(next.at)}` : "";
-  };
-  const announcementsHtml = announcements.length
-    ? `<h2>Announcements</h2>${announcements
-        .map(
-          (a) => `<div class=j><b>${esc(a.announcer)}</b> - ${esc(a.subject)}
-<div class=m>${a.status === "watching" ? "👀 watching" : a.status === "confirmed" ? "✅ posting found" : "⌛ expired"} · ${a.open_at ? `opens ${fmtPT(a.open_at)}` : "date not stated"}${nextReminder(a)} · received ${fmtPT(a.received_at)}</div></div>`,
-        )
-        .join("")}<h2>Jobs</h2>`
-    : "";
-  const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>EMT Job Watch</title>
-<style>body{font:15px system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;color:#111;background:#fff}
-@media(prefers-color-scheme:dark){body{color:#eee;background:#111}a{color:#8ab4ff}}
-.j{padding:10px 0;border-top:1px solid #8884}.m{color:#888;font-size:13px}.gone{opacity:.45}</style>
-<h1>EMT Job Watch</h1><p class=m>EMT-B jobs within ${HOME.radiusMiles} mi of ${HOME.label}. Faded = no longer listed.</p>
-${announcementsHtml}${
-    jobs
-      .map(
-        (j: any) => `<div class="j ${Date.now() - j.last_seen > 60 * 60 * 1000 ? "gone" : ""}">
-<a href="${esc(j.url)}"><b>${esc(j.title)}</b></a><br>${esc([j.employer, j.location].filter(Boolean).join(" - "))}
-<div class=m>${esc([j.detail, `found ${new Date(j.first_seen).toLocaleString("en-US", { timeZone: "America/Los_Angeles" })}`, j.source].filter(Boolean).join(" · "))}</div></div>`,
-      )
-      .join("") || "<p>No matches yet.</p>"
-  }
-<h2>Boards</h2>${status
-    .map(
-      (s: any) =>
-        `<div class=m>${s.last_error_at && s.last_error_at > (s.last_ok ?? 0) ? "❌" : "✅"} <b>${esc(s.source)}</b> - ok ${ago(s.last_ok)}, ${s.last_count ?? 0} listings${s.last_error_at > (s.last_ok ?? 0) ? ` - ${esc(s.last_error ?? "")}` : ""}${s.failures ? ` - ${s.failures} failures in a row, next try ${s.next_attempt > Date.now() ? `in ${Math.ceil((s.next_attempt - Date.now()) / 60000)} min` : "next tick"}` : ""}</div>`,
-    )
-    .join("")}`;
-  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
 export default {
