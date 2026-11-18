@@ -22,7 +22,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const findAnnouncer = (from: string, env?: Pick<WorkerEnv, "ANNOUNCE_TEST_FROM">): Announcer | undefined => {
   const test = env?.ANNOUNCE_TEST_FROM?.trim().toLowerCase();
   if (test && from.trim().toLowerCase() === test) return { name: "Test", from: /$^/, sources: [] };
-  return ANNOUNCERS.find((a) => a.from.test(from));
+  return ANNOUNCERS.find((a) => a.from.test(from) && !a.notFrom?.test(from));
 };
 
 /** Strong body phrases. Plain "EMT" isn't enough ("EMT certification required" is on every FF posting). */
@@ -41,7 +41,17 @@ const sentenceAt = (text: string, index: number) => {
  * recruit), or null (e.g. a Fire Recruit Paramedic recruitment). Subject first, then strong body phrases
  * with the same paramedic-only and lateral excludes as job titles.
  */
+/** Form-submission copies and subscription confirmations: about a signup, not an opening. */
+const NOT_ANNOUNCEMENT =
+  /formstack submission|submitted at|signup for|sign-up for|confirm (your )?(subscription|email)|thank you for (signing up|subscribing)|you('ve| have)? (been )?(subscribed|unsubscribed)/i;
+
+/** An announcement talks about an opening. ("recruitment", not "recruit": signup checkboxes say "Firefighter recruit".) */
+const OPENING_SIGNAL =
+  /\b(open|opens|opened|opening|reopen|reopens|reopening|accept|accepts|accepting|apply|applications?|recruitment|hiring|filing|vacanc(y|ies))\b/i;
+
 export function classifyAnnouncement(subject: string, text: string): Category | null {
+  if (NOT_ANNOUNCEMENT.test(`${subject}\n${text}`)) return null;
+  if (!OPENING_SIGNAL.test(`${subject}\n${text}`)) return null;
   const fromSubject = classifyTitle(subject);
   if (fromSubject) return fromSubject;
   if (BODY_EMT.test(text)) return "emt";

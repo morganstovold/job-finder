@@ -143,6 +143,8 @@ export interface Announcer {
   name: string;
   /** Matched against the sender address. */
   from: RegExp;
+  /** Senders from this agency that never send announcements (e.g. form-submission copies). */
+  notFrom?: RegExp;
   sources: string[];
 }
 
@@ -165,6 +167,8 @@ export const ANNOUNCERS: Announcer[] = [
     name: "Sac City Fire",
     // TODO: check against a real Sac Fire email and tighten.
     from: /@cityofsacramento\.(org|gov)$|sacfire/i,
+    // forms@cityofsacramento.org sends copies of form submissions, like your notification signup.
+    notFrom: /^forms@/i,
     sources: ["Sac City Fire"],
   },
 ];

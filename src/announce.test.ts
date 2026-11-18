@@ -46,7 +46,7 @@ test("no stated date, past dates, and non-opening dates give null", () => {
 
 test("announcement category: single-role EMT, firefighter recruit, or not relevant", () => {
   expect(classifyAnnouncement("Single Role EMT recruitment opening soon", "")).toBe("emt");
-  expect(classifyAnnouncement("EMS Trainee program", "")).toBe("emt");
+  expect(classifyAnnouncement("EMS Trainee program", "Applications open 12/1.")).toBe("emt");
   expect(classifyAnnouncement("Hiring update", "Our Fire Service EMT recruitment opens 12/1.")).toBe("emt");
   expect(classifyAnnouncement("Firefighter Recruit recruitment", "Applications open 12/1.")).toBe("ff");
   expect(classifyAnnouncement("Hiring update", "The Fire Recruit (EMT) recruitment opens 12/1.")).toBe("ff");
@@ -364,4 +364,30 @@ test("cancelling announcements terminates their workflows and removes the rows",
   expect(terminated).toEqual(["ann-1"]); // ann-2 had already finished; still removed
   expect(db.sqlite.query(`SELECT announcer FROM announcements`).all()).toEqual([{ announcer: "Sac City Fire" }]);
   expect(await cancelAnnouncements(cancelEnv, { id: 99 })).toEqual([]);
+});
+
+const SIGNUP_COPY = `Formstack Submission For: Signup for Sacramento Fire Department Notifications
+Submitted at 11/17/26 10:25 PM
+Name:\tMORGAN STOVOLD
+Email:\tannounce@morgannstovold.com
+Phone:\t
+Checkbox:\tEmail
+:\t
+Checkbox:\tFirefighter recruit
+Fire Service EMT and Paramedic
+Emergency Medical Services Trainee`;
+
+test("a notification-signup confirmation is not an announcement", async () => {
+  // Content alone rules it out (no opening wording; form-submission text)...
+  expect(classifyAnnouncement("Signup for Sacramento Fire Department Notifications", SIGNUP_COPY)).toBeNull();
+  // ...and forms@ copies aren't treated as Sac City Fire announcements at all.
+  expect(findAnnouncer("forms@cityofsacramento.org")).toBeUndefined();
+
+  const result = await handleAnnouncementEmail(
+    email("forms@cityofsacramento.org", "Signup for Sacramento Fire Department Notifications", SIGNUP_COPY),
+    env(),
+  );
+  expect(result).toMatchObject({ action: "forwarded", reason: "unknown sender" });
+  expect(forwarded).toEqual(["me@example.com"]);
+  expect(queued).toEqual([]);
 });
