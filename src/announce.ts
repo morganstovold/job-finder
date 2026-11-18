@@ -195,3 +195,25 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
     return { action: "forwarded", reason: "error", error: String((e as Error)?.message ?? e) };
   }
 }
+
+/**
+ * Admin: cancel announcements (by id, or every one from an announcer, e.g. "Test"). Terminates each
+ * one's Workflow so no reminders fire, then deletes the row so it leaves the dashboard.
+ */
+export async function cancelAnnouncements(env: WorkerEnv, by: { id?: number; announcer?: string }) {
+  const { results } = await env.DB.prepare(
+    `SELECT id FROM announcements WHERE (?1 IS NOT NULL AND id = ?1) OR (?2 IS NOT NULL AND announcer = ?2)`,
+  )
+    .bind(by.id ?? null, by.announcer ?? null)
+    .all<{ id: number }>();
+  for (const { id } of results) {
+    try {
+      await (await env.ANNOUNCE_WF.get(`ann-${id}`)).terminate();
+    } catch (e) {
+      // Already finished (or never started): nothing left to stop.
+      console.log(`announcement ${id}: workflow not terminated: ${(e as Error)?.message ?? e}`);
+    }
+    await env.DB.prepare(`DELETE FROM announcements WHERE id = ?`).bind(id).run();
+  }
+  return results.map((r) => r.id);
+}

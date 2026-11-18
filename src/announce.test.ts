@@ -1,7 +1,13 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 
 import { type Step, watchAnnouncement } from "./announce-watch.ts";
-import { classifyAnnouncement, findAnnouncer, handleAnnouncementEmail, parseOpenAt } from "./announce.ts";
+import {
+  cancelAnnouncements,
+  classifyAnnouncement,
+  findAnnouncer,
+  handleAnnouncementEmail,
+  parseOpenAt,
+} from "./announce.ts";
 import { claimAndNotify } from "./jobs.ts";
 import { memoryD1 } from "./testing/d1.ts";
 
@@ -336,4 +342,26 @@ test("FF recruit announcements and reminders are normal priority, never emergenc
   const { step } = fakeStep({ jobId: "x" });
   await watchAnnouncement(env(), 1, step);
   expect(queued.map((m) => m.priority)).toEqual([0, 0, 0]);
+});
+
+test("cancelling announcements terminates their workflows and removes the rows", async () => {
+  const terminated: string[] = [];
+  const cancelEnv = {
+    ...env(),
+    ANNOUNCE_WF: {
+      get: async (id: string) => ({
+        terminate: async () => {
+          if (id === "ann-2") throw new Error("instance already complete");
+          terminated.push(id);
+        },
+      }),
+    },
+  };
+  for (const announcer of ["Test", "Test", "Sac City Fire"])
+    db.sqlite.query(`INSERT INTO announcements (announcer, subject, received_at) VALUES (?, 's', 1)`).run(announcer);
+
+  expect(await cancelAnnouncements(cancelEnv, { announcer: "Test" })).toEqual([1, 2]);
+  expect(terminated).toEqual(["ann-1"]); // ann-2 had already finished; still removed
+  expect(db.sqlite.query(`SELECT announcer FROM announcements`).all()).toEqual([{ announcer: "Sac City Fire" }]);
+  expect(await cancelAnnouncements(cancelEnv, { id: 99 })).toEqual([]);
 });

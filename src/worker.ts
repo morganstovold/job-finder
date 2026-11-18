@@ -1,5 +1,5 @@
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { handleAnnouncementEmail } from "./announce.ts";
+import { cancelAnnouncements, handleAnnouncementEmail } from "./announce.ts";
 import { HOME, SOURCES } from "./config.ts";
 import { dashboard } from "./dashboard.ts";
 import { claimAndNotify, TOUCH_EVERY_MS } from "./jobs.ts";
@@ -144,6 +144,16 @@ export default {
     const authed = !!env.ADMIN_KEY && url.searchParams.get("key") === env.ADMIN_KEY;
 
     if (url.pathname === "/run" && authed) return Response.json(await run(env, { manual: true }));
+    if (url.pathname === "/announcements/cancel" && authed) {
+      const id = url.searchParams.get("id");
+      const announcer = url.searchParams.get("announcer");
+      if (!id && !announcer) return new Response("pass ?id= or ?announcer=\n", { status: 400 });
+      const cancelled = await cancelAnnouncements(env, {
+        id: id ? Number(id) : undefined,
+        announcer: announcer ?? undefined,
+      });
+      return Response.json({ cancelled });
+    }
     if (url.pathname === "/test" && authed) {
       // Goes through the notify Queue like a real alert. A fresh id each time so dedupe doesn't skip it.
       const id = `test:${Date.now()}`;

@@ -129,7 +129,7 @@ skipped.
    Other agencies' lists need their own `ANNOUNCERS` entry once you know their sender.
    **Testing:** set `ANNOUNCE_TEST_FROM` in `.env` to your personal address and deploy. Mail from it
    is treated as a "Test" announcement (no boards linked, so it can't mark a real posting "OPEN NOW").
-   Remove it when you're done.
+   Remove it when you're done, and cancel the test announcement (below) so its reminders don't fire.
 4. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `PUSHOVER_USER`, `PUSHOVER_TOKEN`, and `ADMIN_KEY`.
 5. Deploy:
 
@@ -139,7 +139,8 @@ skipped.
 
 6. Test: visit `https://jobs.stovold.dev/test?key=<ADMIN_KEY>` to send a test alert through the
    queue (add `&priority=2` to try an emergency push), or
-   `/run?key=<ADMIN_KEY>` to run a check now. `/` is a small dashboard of recent matches and
+   `/run?key=<ADMIN_KEY>` to run a check now. `/announcements/cancel?announcer=Test&key=<ADMIN_KEY>`
+   (or `?id=N`) cancels announcements: stops their reminders and removes them from the dashboard. `/` is a small dashboard of recent matches and
    board health.
 
 ## Commands
