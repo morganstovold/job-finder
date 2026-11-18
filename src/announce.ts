@@ -4,7 +4,7 @@ import * as chrono from "chrono-node";
 import PostalMime from "postal-mime";
 
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { ANNOUNCERS, FF_TRAINEE_EXCLUDE, SOURCES, type Announcer } from "./config.ts";
+import { ANNOUNCERS, FF_TRAINEE_EXCLUDE, PRIORITY, SOURCES, type Announcer } from "./config.ts";
 import { type Category, classifyTitle } from "./filter.ts";
 import { claimAndNotify } from "./jobs.ts";
 export type { AnnouncementRow } from "./jobs.ts";
@@ -14,8 +14,16 @@ import { fetchSource } from "./sources.ts";
 export const TZ = "America/Los_Angeles";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Sender allowlist: unknown senders are only forwarded. */
-export const findAnnouncer = (from: string): Announcer | undefined => ANNOUNCERS.find((a) => a.from.test(from));
+/**
+ * Sender allowlist: unknown senders are only forwarded. ANNOUNCE_TEST_FROM (an exact address, kept in
+ * .env so it isn't committed) is accepted as a "Test" announcer with no boards linked, so a test
+ * announcement can't mark a real posting "OPEN NOW".
+ */
+export const findAnnouncer = (from: string, env?: Pick<WorkerEnv, "ANNOUNCE_TEST_FROM">): Announcer | undefined => {
+  const test = env?.ANNOUNCE_TEST_FROM?.trim().toLowerCase();
+  if (test && from.trim().toLowerCase() === test) return { name: "Test", from: /$^/, sources: [] };
+  return ANNOUNCERS.find((a) => a.from.test(from) && !a.notFrom?.test(from));
+};
 
 /** Strong body phrases. Plain "EMT" isn't enough ("EMT certification required" is on every FF posting). */
 const BODY_EMT = /single[- ]role|EMS trainee|Fire Service EMT/i;
@@ -33,7 +41,17 @@ const sentenceAt = (text: string, index: number) => {
  * recruit), or null (e.g. a Fire Recruit Paramedic recruitment). Subject first, then strong body phrases
  * with the same paramedic-only and lateral excludes as job titles.
  */
+/** Form-submission copies and subscription confirmations: about a signup, not an opening. */
+const NOT_ANNOUNCEMENT =
+  /formstack submission|submitted at|signup for|sign-up for|confirm (your )?(subscription|email)|thank you for (signing up|subscribing)|you('ve| have)? (been )?(subscribed|unsubscribed)/i;
+
+/** An announcement talks about an opening. ("recruitment", not "recruit": signup checkboxes say "Firefighter recruit".) */
+const OPENING_SIGNAL =
+  /\b(open|opens|opened|opening|reopen|reopens|reopening|accept|accepts|accepting|apply|applications?|recruitment|hiring|filing|vacanc(y|ies))\b/i;
+
 export function classifyAnnouncement(subject: string, text: string): Category | null {
+  if (NOT_ANNOUNCEMENT.test(`${subject}\n${text}`)) return null;
+  if (!OPENING_SIGNAL.test(`${subject}\n${text}`)) return null;
   const fromSubject = classifyTitle(subject);
   if (fromSubject) return fromSubject;
   if (BODY_EMT.test(text)) return "emt";
@@ -142,7 +160,7 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
   // Nothing below may throw: an error here bounces the mail back to the agency's list server, which
   // can unsubscribe the address. The email was already forwarded, so log and move on.
   try {
-    const announcer = findAnnouncer(message.from);
+    const announcer = findAnnouncer(message.from, env);
     if (!announcer) return { action: "forwarded", reason: "unknown sender" };
 
     const email = await PostalMime.parse(message.raw);
@@ -165,7 +183,8 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
         kind: "push",
         title: `${announcer.name}: ${categoryNoun(category)} opening announced - ${openAt ? `opens ${fmtPT(openAt)}` : "date not stated"}`,
         body: subject,
-        priority: 1,
+        // EMT announcements sound through quiet hours; FF recruit ones are a normal notification.
+        priority: category === "ff" ? PRIORITY.ff : 1,
         dedupeKey: `announce:${id}`,
       },
     ]);
@@ -173,7 +192,7 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
     await env.ANNOUNCE_WF.create({ id: `ann-${id}`, params: { announcementId: id } });
 
     // The posting may already be live: check the announcer's boards now. A match is claimed and
-    // confirmed through the normal path (priority 2, "OPEN NOW -").
+    // confirmed through the normal path ("OPEN NOW -").
     const sources = SOURCES.filter((s) => announcer.sources.includes(s.name));
     const found = (await Promise.allSettled(sources.map(fetchSource))).flatMap((r) =>
       r.status === "fulfilled" ? r.value : [],
@@ -185,4 +204,26 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
     console.error(`announce@ from ${message.from}: ${(e as Error)?.message ?? e}`);
     return { action: "forwarded", reason: "error", error: String((e as Error)?.message ?? e) };
   }
+}
+
+/**
+ * Admin: cancel announcements (by id, or every one from an announcer, e.g. "Test"). Terminates each
+ * one's Workflow so no reminders fire, then deletes the row so it leaves the dashboard.
+ */
+export async function cancelAnnouncements(env: WorkerEnv, by: { id?: number; announcer?: string }) {
+  const { results } = await env.DB.prepare(
+    `SELECT id FROM announcements WHERE (?1 IS NOT NULL AND id = ?1) OR (?2 IS NOT NULL AND announcer = ?2)`,
+  )
+    .bind(by.id ?? null, by.announcer ?? null)
+    .all<{ id: number }>();
+  for (const { id } of results) {
+    try {
+      await (await env.ANNOUNCE_WF.get(`ann-${id}`)).terminate();
+    } catch (e) {
+      // Already finished (or never started): nothing left to stop.
+      console.log(`announcement ${id}: workflow not terminated: ${(e as Error)?.message ?? e}`);
+    }
+    await env.DB.prepare(`DELETE FROM announcements WHERE id = ?`).bind(id).run();
+  }
+  return results.map((r) => r.id);
 }

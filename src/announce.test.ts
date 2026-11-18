@@ -1,7 +1,13 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 
 import { type Step, watchAnnouncement } from "./announce-watch.ts";
-import { classifyAnnouncement, findAnnouncer, handleAnnouncementEmail, parseOpenAt } from "./announce.ts";
+import {
+  cancelAnnouncements,
+  classifyAnnouncement,
+  findAnnouncer,
+  handleAnnouncementEmail,
+  parseOpenAt,
+} from "./announce.ts";
 import { claimAndNotify } from "./jobs.ts";
 import { memoryD1 } from "./testing/d1.ts";
 
@@ -40,7 +46,7 @@ test("no stated date, past dates, and non-opening dates give null", () => {
 
 test("announcement category: single-role EMT, firefighter recruit, or not relevant", () => {
   expect(classifyAnnouncement("Single Role EMT recruitment opening soon", "")).toBe("emt");
-  expect(classifyAnnouncement("EMS Trainee program", "")).toBe("emt");
+  expect(classifyAnnouncement("EMS Trainee program", "Applications open 12/1.")).toBe("emt");
   expect(classifyAnnouncement("Hiring update", "Our Fire Service EMT recruitment opens 12/1.")).toBe("emt");
   expect(classifyAnnouncement("Firefighter Recruit recruitment", "Applications open 12/1.")).toBe("ff");
   expect(classifyAnnouncement("Hiring update", "The Fire Recruit (EMT) recruitment opens 12/1.")).toBe("ff");
@@ -299,4 +305,89 @@ test("a firefighter recruit announcement is stored as ff and only an ff posting 
     status: "confirmed",
     job_id: "neogov:802",
   });
+});
+
+test("the tricky test email: past, closing, deadline and send dates are ignored; EMT wins over Fire Recruit (Paramedic)", () => {
+  const subject = "Fwd: Sacramento Fire - Recruitment Update (Please Read)";
+  const text = `Thank you for your interest in a career with the Sacramento Fire Department.
+
+Our previous EMS recruitment closed on November 1, 2026 after reaching 250 applications.
+
+We are excited to announce that the Single Role EMT (EMS Trainee) recruitment will reopen soon. The filing period closes Friday, December 4 at 5:00 PM or once 250 applications are received; applications open Monday, November 23 at 12:01 AM.
+
+Please note: Fire Recruit (Paramedic) applications are accepted through December 15. EMT certification is required for all positions.
+
+Questions? Reply by November 20.
+
+Sent: Tuesday, November 17, 2026`;
+  expect(classifyAnnouncement(subject, text)).toBe("emt");
+  expect(parseOpenAt(subject, text, RECEIVED)).toBe(Date.parse("2026-11-23T08:01:00Z"));
+});
+
+test("test sender: ANNOUNCE_TEST_FROM is accepted as 'Test' with no linked boards", () => {
+  const testEnv = { ANNOUNCE_TEST_FROM: "Me@Gmail.com" } as any;
+  expect(findAnnouncer("me@gmail.com", testEnv)).toMatchObject({ name: "Test", sources: [] });
+  expect(findAnnouncer("me@gmail.com")).toBeUndefined();
+  expect(findAnnouncer("someone@gmail.com", testEnv)).toBeUndefined();
+});
+
+test("FF recruit announcements and reminders are normal priority, never emergency", async () => {
+  await handleAnnouncementEmail(
+    email("hr@cityofsacramento.org", "Fire Recruit Recruitment", "Fire Recruit applications open 12/16/2099 at 9 AM."),
+    env(),
+  );
+  expect(queued.filter((m) => m.kind === "push").map((m) => m.priority)).toEqual([0]);
+
+  queued = [];
+  const { step } = fakeStep({ jobId: "x" });
+  await watchAnnouncement(env(), 1, step);
+  expect(queued.map((m) => m.priority)).toEqual([0, 0, 0]);
+});
+
+test("cancelling announcements terminates their workflows and removes the rows", async () => {
+  const terminated: string[] = [];
+  const cancelEnv = {
+    ...env(),
+    ANNOUNCE_WF: {
+      get: async (id: string) => ({
+        terminate: async () => {
+          if (id === "ann-2") throw new Error("instance already complete");
+          terminated.push(id);
+        },
+      }),
+    },
+  };
+  for (const announcer of ["Test", "Test", "Sac City Fire"])
+    db.sqlite.query(`INSERT INTO announcements (announcer, subject, received_at) VALUES (?, 's', 1)`).run(announcer);
+
+  expect(await cancelAnnouncements(cancelEnv, { announcer: "Test" })).toEqual([1, 2]);
+  expect(terminated).toEqual(["ann-1"]); // ann-2 had already finished; still removed
+  expect(db.sqlite.query(`SELECT announcer FROM announcements`).all()).toEqual([{ announcer: "Sac City Fire" }]);
+  expect(await cancelAnnouncements(cancelEnv, { id: 99 })).toEqual([]);
+});
+
+const SIGNUP_COPY = `Formstack Submission For: Signup for Sacramento Fire Department Notifications
+Submitted at 11/17/26 10:25 PM
+Name:\tMORGAN STOVOLD
+Email:\tannounce@morgannstovold.com
+Phone:\t
+Checkbox:\tEmail
+:\t
+Checkbox:\tFirefighter recruit
+Fire Service EMT and Paramedic
+Emergency Medical Services Trainee`;
+
+test("a notification-signup confirmation is not an announcement", async () => {
+  // Content alone rules it out (no opening wording; form-submission text)...
+  expect(classifyAnnouncement("Signup for Sacramento Fire Department Notifications", SIGNUP_COPY)).toBeNull();
+  // ...and forms@ copies aren't treated as Sac City Fire announcements at all.
+  expect(findAnnouncer("forms@cityofsacramento.org")).toBeUndefined();
+
+  const result = await handleAnnouncementEmail(
+    email("forms@cityofsacramento.org", "Signup for Sacramento Fire Department Notifications", SIGNUP_COPY),
+    env(),
+  );
+  expect(result).toMatchObject({ action: "forwarded", reason: "unknown sender" });
+  expect(forwarded).toEqual(["me@example.com"]);
+  expect(queued).toEqual([]);
 });

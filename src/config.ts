@@ -53,11 +53,6 @@ export const FF_TRAINEE_EXCLUDE =
 export type SourceConfig = {
   name: string;
   /**
-   * Pushover priority for this board's new jobs: 2 = emergency (repeats until acknowledged) for the
-   * boards where postings close in minutes, 1 = high for the rest. Default 1.
-   */
-  priority?: 1 | 2;
-  /**
    * The board always has listings, so 0 after a non-zero count means the parser broke. Counts as a
    * failure for the "board broken" alert, but without backoff (an empty board can be real).
    */
@@ -102,7 +97,7 @@ const FIRE_AGENCIES: Record<string, { name: string; expectNonEmpty?: boolean }> 
 // "Create Job Alerts" button on its board instead.
 export const SOURCES: SourceConfig[] = [
   // AMR + sister brands - iCIMS JSON API, has coordinates. AMR postings have closed in ~45 min.
-  { kind: "gmr", name: "AMR / GMR", priority: 2, expectNonEmpty: true },
+  { kind: "gmr", name: "AMR / GMR", expectNonEmpty: true },
   // Falck Northern California (Alameda County 911). Falck runs a separate OnShift
   // tenant per region - add more here (find the slug from an apply link).
   // Occasionally rate-limits (403) - the worker backs off automatically.
@@ -131,12 +126,11 @@ export const SOURCES: SourceConfig[] = [
     kind: "neogovAgency" as const,
     name,
     agency,
-    priority: 2 as const,
     expectNonEmpty,
   })),
   // Fire departments recruiting off FCTC's Statewide Eligibility List (you're on it). Mostly
   // "Firefighter Trainee/Recruit" rows; paramedic-only rows are dropped by the filter. Recruitments
-  // stay open for days and the agency page / GovernmentJobs usually alert first, so priority 1.
+  // stay open for days and the agency page / GovernmentJobs usually alert first.
   { kind: "fctc", name: "FCTC", everyMinutes: 5 },
 ];
 
@@ -149,6 +143,8 @@ export interface Announcer {
   name: string;
   /** Matched against the sender address. */
   from: RegExp;
+  /** Senders from this agency that never send announcements (e.g. form-submission copies). */
+  notFrom?: RegExp;
   sources: string[];
 }
 
@@ -159,11 +155,20 @@ export interface Announcer {
 export const REMINDERS_MIN = [1440, 180, 10];
 export const EMERGENCY_WITHIN_MIN = 60;
 
+/**
+ * Push priority by job type. 911 EMT positions are the goal: emergency (2, repeats every 30s until you
+ * acknowledge it). Firefighter trainee/recruit openings are nice-to-haves: normal (0, a regular
+ * notification that respects your Pushover quiet hours). 1 = high (sounds through quiet hours).
+ */
+export const PRIORITY = { emt: 2, ff: 0 } as const;
+
 export const ANNOUNCERS: Announcer[] = [
   {
     name: "Sac City Fire",
     // TODO: check against a real Sac Fire email and tighten.
     from: /@cityofsacramento\.(org|gov)$|sacfire/i,
+    // forms@cityofsacramento.org sends copies of form submissions, like your notification signup.
+    notFrom: /^forms@/i,
     sources: ["Sac City Fire"],
   },
 ];

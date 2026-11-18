@@ -204,3 +204,20 @@ test("email subject and push labels follow the job category", async () => {
       .map((m) => m.title),
   ).toEqual(["EMT: AMR - EMT", "FF Recruit: ConFire - Fire Recruit"]);
 });
+
+const job = (id: string, category: "emt" | "ff") =>
+  ({ id, source: "Sac City Fire", title: "t", employer: "e", location: "", url: "u", category }) as const;
+
+test("push priority by job type: 911 EMT = emergency (2), FF recruit = normal (0)", async () => {
+  const { jobMessages } = await import("./notify.ts");
+  const msgs = jobMessages([job("a", "emt"), job("b", "ff")]);
+  expect(msgs.filter((m) => m.kind === "push").map((m) => m.priority)).toEqual([2, 0]);
+  expect(jobMessages([job("c", "ff")]).find((m) => m.kind === "email")!.priority).toBe(0);
+
+  // Priority 0 is a plain notification: no emergency retry/expire fields.
+  pushes = [];
+  const b = batch("notify", [{ ...push, priority: 0, dedupeKey: "push:p0" }]);
+  await handleNotifyBatch(b.batch, env());
+  expect(pushes[0].get("priority")).toBe("0");
+  expect(pushes[0].get("retry")).toBeNull();
+});

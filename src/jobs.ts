@@ -44,7 +44,7 @@ export async function confirmAnnouncement(env: WorkerEnv, row: AnnouncementRow, 
 
 /**
  * Filter fetched jobs to EMT matches, claim the new ones, and enqueue their alerts. A new job from a
- * board an announcement is watching is the posting it announced: alert at priority 2 as "OPEN NOW -"
+ * board an announcement is watching is the posting it announced: alert as "OPEN NOW -" (at its job type's priority)
  * and confirm the announcement. `extra` statements (board status) ride in the same D1 batch.
  */
 export async function claimAndNotify(env: WorkerEnv, jobs: Job[], now: number, extra: D1PreparedStatement[] = []) {
@@ -101,7 +101,7 @@ export async function claimAndNotify(env: WorkerEnv, jobs: Job[], now: number, e
   try {
     await enqueue(env, [
       ...jobMessages(regular, { claimedAt: now }),
-      ...jobMessages(opened, { priority: () => 2, prefix: "OPEN NOW - ", claimedAt: now }),
+      ...jobMessages(opened, { prefix: "OPEN NOW - ", claimedAt: now }),
     ]);
   } catch (e) {
     await env.DB.prepare(`DELETE FROM jobs WHERE id IN (SELECT value FROM json_each(?))`)

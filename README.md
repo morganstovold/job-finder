@@ -37,8 +37,7 @@ rules in [`src/config.ts`](src/config.ts), checked with `bun test`):
   completed academy.
 
 Alerts are labeled by category (push titles start with `EMT:` or `FF Recruit:`), and the dashboard
-tags each job. Recruit postings close at applicant caps too, so they get the same priority as EMT
-jobs from the same board.
+tags each job.
 
 Postings can close fast (Sac City Fire's single-role EMT closed 14 minutes after opening at 250
 applicants; AMR in about 45), so AMR/GMR, the fire agency pages and SF are checked every minute.
@@ -89,9 +88,13 @@ announcement a few minutes out.
 
 ### Alert priority and delivery
 
-Each board has a Pushover `priority` in `src/config.ts`: **2 (emergency, repeats every 30s until
-you acknowledge it)** for AMR and the fire agency pages, where postings close in minutes, and **1
-(high, sounds through quiet hours)** for the rest.
+Push priority depends on the job type (`PRIORITY` in `src/config.ts`), not the board:
+
+- **911 EMT positions: 2 (emergency).** Repeats every 30s until you acknowledge it, from any board.
+- **Firefighter trainee/recruit openings: 0 (normal).** A regular notification that respects your
+  Pushover quiet hours: nice to know, not urgent.
+- **Announcements:** an EMT announcement pushes at 1 (high, sounds through quiet hours) and its
+  reminders go to 2 within an hour of opening. FF recruit announcements and their reminders stay at 0.
 
 Alerts never go out directly. Each one (a push per job, so tapping opens its apply page, plus one
 summary email) is a message on the `notify` Cloudflare Queue:
@@ -123,6 +126,10 @@ skipped.
    [single-role EMT page](https://www.cityofsacramento.gov/fire/join-sacramento-fire/career-paths/ems-single-role))
    with `announce@morgannstovold.com`, then click the confirmation link in the forwarded email. When the
    first real announcement arrives, check its sender and tighten `from` in `ANNOUNCERS` if needed.
+   Other agencies' lists need their own `ANNOUNCERS` entry once you know their sender.
+   **Testing:** set `ANNOUNCE_TEST_FROM` in `.env` to your personal address and deploy. Mail from it
+   is treated as a "Test" announcement (no boards linked, so it can't mark a real posting "OPEN NOW").
+   Remove it when you're done, and cancel the test announcement (below) so its reminders don't fire.
 4. Copy `.env.example` to `.env` and fill in `NOTIFY_EMAIL`, `PUSHOVER_USER`, `PUSHOVER_TOKEN`, and `ADMIN_KEY`.
 5. Deploy:
 
@@ -132,7 +139,8 @@ skipped.
 
 6. Test: visit `https://jobs.stovold.dev/test?key=<ADMIN_KEY>` to send a test alert through the
    queue (add `&priority=2` to try an emergency push), or
-   `/run?key=<ADMIN_KEY>` to run a check now. `/` is a small dashboard of recent matches and
+   `/run?key=<ADMIN_KEY>` to run a check now. `/announcements/cancel?announcer=Test&key=<ADMIN_KEY>`
+   (or `?id=N`) cancels announcements: stops their reminders and removes them from the dashboard. `/` is a small dashboard of recent matches and
    board health.
 
 ## Commands
