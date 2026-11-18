@@ -147,7 +147,8 @@ export default {
     if (url.pathname === "/test" && authed) {
       // Goes through the notify Queue like a real alert. A fresh id each time so dedupe doesn't skip it.
       const id = `test:${Date.now()}`;
-      const priority = url.searchParams.get("priority") === "2" ? 2 : 1;
+      const p = Number(url.searchParams.get("priority") ?? 1);
+      const priority = (p === 0 || p === 2 ? p : 1) as 0 | 1 | 2;
       await enqueue(
         env,
         jobMessages(

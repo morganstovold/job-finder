@@ -46,6 +46,8 @@ export const Worker = Cloudflare.Worker(
         ANNOUNCE_WF: Cloudflare.Workflow<{ announcementId: number }>("AnnouncementWorkflow", {
           className: "AnnouncementWorkflow",
         }),
+        // Optional: one personal address allowed to send test announcements (see README).
+        ANNOUNCE_TEST_FROM: Config.String("ANNOUNCE_TEST_FROM").pipe(Config.withDefault("")),
         // Optional override of REMINDERS_MIN (src/config.ts): minutes before opening, e.g. "1440,180,30,5".
         REMINDER_OFFSETS_MIN: Config.String("REMINDER_OFFSETS_MIN").pipe(Config.withDefault("")),
         // Cloudflare Email Routing send_email binding - free; the recipient must be a

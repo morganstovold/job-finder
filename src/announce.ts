@@ -4,7 +4,7 @@ import * as chrono from "chrono-node";
 import PostalMime from "postal-mime";
 
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { ANNOUNCERS, FF_TRAINEE_EXCLUDE, SOURCES, type Announcer } from "./config.ts";
+import { ANNOUNCERS, FF_TRAINEE_EXCLUDE, PRIORITY, SOURCES, type Announcer } from "./config.ts";
 import { type Category, classifyTitle } from "./filter.ts";
 import { claimAndNotify } from "./jobs.ts";
 export type { AnnouncementRow } from "./jobs.ts";
@@ -14,8 +14,16 @@ import { fetchSource } from "./sources.ts";
 export const TZ = "America/Los_Angeles";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Sender allowlist: unknown senders are only forwarded. */
-export const findAnnouncer = (from: string): Announcer | undefined => ANNOUNCERS.find((a) => a.from.test(from));
+/**
+ * Sender allowlist: unknown senders are only forwarded. ANNOUNCE_TEST_FROM (an exact address, kept in
+ * .env so it isn't committed) is accepted as a "Test" announcer with no boards linked, so a test
+ * announcement can't mark a real posting "OPEN NOW".
+ */
+export const findAnnouncer = (from: string, env?: Pick<WorkerEnv, "ANNOUNCE_TEST_FROM">): Announcer | undefined => {
+  const test = env?.ANNOUNCE_TEST_FROM?.trim().toLowerCase();
+  if (test && from.trim().toLowerCase() === test) return { name: "Test", from: /$^/, sources: [] };
+  return ANNOUNCERS.find((a) => a.from.test(from));
+};
 
 /** Strong body phrases. Plain "EMT" isn't enough ("EMT certification required" is on every FF posting). */
 const BODY_EMT = /single[- ]role|EMS trainee|Fire Service EMT/i;
@@ -142,7 +150,7 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
   // Nothing below may throw: an error here bounces the mail back to the agency's list server, which
   // can unsubscribe the address. The email was already forwarded, so log and move on.
   try {
-    const announcer = findAnnouncer(message.from);
+    const announcer = findAnnouncer(message.from, env);
     if (!announcer) return { action: "forwarded", reason: "unknown sender" };
 
     const email = await PostalMime.parse(message.raw);
@@ -165,7 +173,8 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
         kind: "push",
         title: `${announcer.name}: ${categoryNoun(category)} opening announced - ${openAt ? `opens ${fmtPT(openAt)}` : "date not stated"}`,
         body: subject,
-        priority: 1,
+        // EMT announcements sound through quiet hours; FF recruit ones are a normal notification.
+        priority: category === "ff" ? PRIORITY.ff : 1,
         dedupeKey: `announce:${id}`,
       },
     ]);
@@ -173,7 +182,7 @@ export async function handleAnnouncementEmail(message: ForwardableEmailMessage, 
     await env.ANNOUNCE_WF.create({ id: `ann-${id}`, params: { announcementId: id } });
 
     // The posting may already be live: check the announcer's boards now. A match is claimed and
-    // confirmed through the normal path (priority 2, "OPEN NOW -").
+    // confirmed through the normal path ("OPEN NOW -").
     const sources = SOURCES.filter((s) => announcer.sources.includes(s.name));
     const found = (await Promise.allSettled(sources.map(fetchSource))).flatMap((r) =>
       r.status === "fulfilled" ? r.value : [],

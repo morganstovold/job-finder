@@ -300,3 +300,40 @@ test("a firefighter recruit announcement is stored as ff and only an ff posting 
     job_id: "neogov:802",
   });
 });
+
+test("the tricky test email: past, closing, deadline and send dates are ignored; EMT wins over Fire Recruit (Paramedic)", () => {
+  const subject = "Fwd: Sacramento Fire - Recruitment Update (Please Read)";
+  const text = `Thank you for your interest in a career with the Sacramento Fire Department.
+
+Our previous EMS recruitment closed on November 1, 2026 after reaching 250 applications.
+
+We are excited to announce that the Single Role EMT (EMS Trainee) recruitment will reopen soon. The filing period closes Friday, December 4 at 5:00 PM or once 250 applications are received; applications open Monday, November 23 at 12:01 AM.
+
+Please note: Fire Recruit (Paramedic) applications are accepted through December 15. EMT certification is required for all positions.
+
+Questions? Reply by November 20.
+
+Sent: Tuesday, November 17, 2026`;
+  expect(classifyAnnouncement(subject, text)).toBe("emt");
+  expect(parseOpenAt(subject, text, RECEIVED)).toBe(Date.parse("2026-11-23T08:01:00Z"));
+});
+
+test("test sender: ANNOUNCE_TEST_FROM is accepted as 'Test' with no linked boards", () => {
+  const testEnv = { ANNOUNCE_TEST_FROM: "Me@Gmail.com" } as any;
+  expect(findAnnouncer("me@gmail.com", testEnv)).toMatchObject({ name: "Test", sources: [] });
+  expect(findAnnouncer("me@gmail.com")).toBeUndefined();
+  expect(findAnnouncer("someone@gmail.com", testEnv)).toBeUndefined();
+});
+
+test("FF recruit announcements and reminders are normal priority, never emergency", async () => {
+  await handleAnnouncementEmail(
+    email("hr@cityofsacramento.org", "Fire Recruit Recruitment", "Fire Recruit applications open 12/16/2099 at 9 AM."),
+    env(),
+  );
+  expect(queued.filter((m) => m.kind === "push").map((m) => m.priority)).toEqual([0]);
+
+  queued = [];
+  const { step } = fakeStep({ jobId: "x" });
+  await watchAnnouncement(env(), 1, step);
+  expect(queued.map((m) => m.priority)).toEqual([0, 0, 0]);
+});

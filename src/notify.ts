@@ -1,12 +1,12 @@
 import type { WorkerEnv } from "../alchemy.run.ts";
-import { HOME, SOURCES } from "./config.ts";
+import { HOME, PRIORITY } from "./config.ts";
 import type { Job } from "./types.ts";
 
 /**
- * Pushover priority. 1 = high: always sounds, even during your Pushover quiet hours.
- * 2 = emergency: repeats every 30s until you acknowledge it in the app (for 1h max).
+ * Pushover priority. 0 = normal (respects your Pushover quiet hours). 1 = high: always sounds, even
+ * during quiet hours. 2 = emergency: repeats every 30s until you acknowledge it in the app (1h max).
  */
-export type Priority = 1 | 2;
+export type Priority = 0 | 1 | 2;
 
 /**
  * Every outbound alert is a message on the `notify` Queue instead of a direct send, so a Pushover
@@ -49,9 +49,10 @@ const hash = (s: string) => {
   return (h >>> 0).toString(36);
 };
 
-export const priorityOf = (job: Job): Priority => SOURCES.find((s) => s.name === job.source)?.priority ?? 1;
+/** By job type (PRIORITY in config.ts): 911 EMT jobs are emergencies, FF recruit openings aren't. */
+export const priorityOf = (job: Job): Priority => PRIORITY[job.category ?? "emt"];
 
-/** Messages for newly found jobs: one push each (at its source's priority) plus one summary email. */
+/** Messages for newly found jobs: one push each (at its job type's priority) plus one summary email. */
 export const CATEGORY_LABEL = { emt: "EMT", ff: "FF Recruit" } as const;
 
 const label = (j: Job) => CATEGORY_LABEL[j.category ?? "emt"];
@@ -73,7 +74,7 @@ const subjectFor = (jobs: Job[], prefix?: string) => {
 };
 
 /**
- * Messages for newly found jobs: one push each (at its source's priority) plus one summary email.
+ * Messages for newly found jobs: one push each (at its job type's priority) plus one summary email.
  * `claimedAt` goes into the dedupe keys, so a job re-alerted after a 24h absence isn't skipped as a repeat.
  */
 export function jobMessages(
@@ -114,7 +115,7 @@ export function jobMessages(
       title: subject,
       body: jobs.map((j) => `[${label(j)}] ${line(j)}\n${j.url}`).join("\n\n"),
       html,
-      priority: jobs.some((j) => priority(j) === 2) ? 2 : 1,
+      priority: Math.max(...jobs.map(priority)) as Priority,
       dedupeKey: `email:${hash(ids)}:${jobs.length}${keySuffix}`,
     } satisfies NotifyMessage,
   ];
