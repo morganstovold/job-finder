@@ -3,11 +3,18 @@ import { isNearbyText } from "./nearby.ts";
 import type { Job } from "./types.ts";
 
 const UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36";
+
+/** Sent with every request; per-call headers override them (the JSON APIs pass Accept: application/json). */
+const DEFAULT_HEADERS = {
+  "User-Agent": UA,
+  Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
 
 const get = async (url: string, headers: Record<string, string> = {}) => {
   // Time out so a hung board can't stall a run into the next minute's tick.
-  const res = await fetch(url, { headers: { "User-Agent": UA, ...headers }, signal: AbortSignal.timeout(20_000) });
+  const res = await fetch(url, { headers: { ...DEFAULT_HEADERS, ...headers }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${url}`);
   return res;
 };
@@ -41,7 +48,9 @@ async function gmr(src: Extract<SourceConfig, { kind: "gmr" }>): Promise<Job[]> 
       sortBy: "posted_date",
       descending: "true",
     });
-    const body = (await (await get(`https://careers.gmr.net/api/jobs?${q}`)).json()) as {
+    const body = (await (
+      await get(`https://careers.gmr.net/api/jobs?${q}`, { Accept: "application/json" })
+    ).json()) as {
       totalCount: number;
       jobs: { data: Record<string, any> }[];
     };
@@ -137,7 +146,9 @@ async function smartrecruiters(src: Extract<SourceConfig, { kind: "smartrecruite
   for (const query of src.queries) {
     const q = new URLSearchParams({ q: query, limit: "100" });
     const body = (await (
-      await get(`https://api.smartrecruiters.com/v1/companies/${src.company}/postings?${q}`)
+      await get(`https://api.smartrecruiters.com/v1/companies/${src.company}/postings?${q}`, {
+        Accept: "application/json",
+      })
     ).json()) as { content: any[] };
     content.push(...body.content);
   }
