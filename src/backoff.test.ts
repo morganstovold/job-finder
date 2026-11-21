@@ -27,7 +27,7 @@ const env: any = {
 
 // Which boards each tick hit, and what they return.
 let hits: Record<string, number[]> = {};
-let falckDown = true;
+let fctcDown = true;
 let gmrJobs: any[] = [];
 let minute = 0;
 // One entry per minute, however many requests a board makes per check.
@@ -39,15 +39,16 @@ const hit = (board: string) => {
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string) => {
   const url = String(input);
-  if (url.includes("onshift")) {
-    hit("falck");
-    return falckDown ? new Response("Forbidden", { status: 403 }) : Response.json([]);
+  // FCTC stands in for a 5-minute board that can be blocked.
+  if (url.includes("fctconline")) {
+    hit("fctc");
+    return fctcDown ? new Response("Forbidden", { status: 403 }) : new Response("");
   }
+  if (url.includes("governmentjobs.com/jobs?")) hit("gjSearch");
   if (url.includes("gmr.net")) {
     hit("gmr");
     return Response.json({ totalCount: gmrJobs.length, jobs: gmrJobs });
   }
-  if (url.includes("calopps")) hit("calopps");
   if (url.includes("smartrecruiters")) return Response.json({ content: [] });
   return new Response("");
 }) as any;
@@ -56,7 +57,7 @@ beforeEach(() => {
   db = memoryD1();
   hits = {};
   queued = [];
-  falckDown = true;
+  fctcDown = true;
   gmrJobs = [];
 });
 afterAll(() => {
@@ -71,24 +72,24 @@ const tick = async (m: number) => {
   await worker.scheduled({} as any, env);
 };
 
-test("every-minute boards run each tick; Falck/CalOpps keep their 5-minute pace", async () => {
-  falckDown = false;
+test("every-minute boards run each tick; FCTC and the GovernmentJobs search keep their 5-minute pace", async () => {
+  fctcDown = false;
   for (let m = 0; m <= 20; m++) await tick(m);
   expect(hits.gmr).toEqual(Array.from({ length: 21 }, (_, i) => i));
-  expect(hits.falck).toEqual([0, 5, 10, 15, 20]);
-  expect(hits.calopps).toEqual([0, 5, 10, 15, 20]);
+  expect(hits.fctc).toEqual([0, 5, 10, 15, 20]);
+  expect(hits.gjSearch).toEqual([0, 5, 10, 15, 20]);
 });
 
-test("failing Falck backs off 5 → 10 → 20 → 40 → 60 min, then returns to its pace", async () => {
+test("failing FCTC backs off 5 → 10 → 20 → 40 → 60 min, then returns to its pace", async () => {
   for (let m = 0; m <= 140; m++) await tick(m);
   // Fails at 0 → +5 → 5 → +10 → 15 → +20 → 35 → +40 → 75 → +60 → 135
-  expect(hits.falck).toEqual([0, 5, 15, 35, 75, 135]);
+  expect(hits.fctc).toEqual([0, 5, 15, 35, 75, 135]);
   expect(hits.gmr.length).toBe(141); // healthy boards never skipped
 
-  falckDown = false;
+  fctcDown = false;
   for (let m = 141; m <= 205; m++) await tick(m);
-  expect(hits.falck.slice(6)).toEqual([195, 200, 205]);
-  const s = db.sqlite.query(`SELECT failures FROM source_status WHERE source = 'Falck NorCal'`).get() as any;
+  expect(hits.fctc.slice(6)).toEqual([195, 200, 205]);
+  const s = db.sqlite.query(`SELECT failures FROM source_status WHERE source = 'FCTC'`).get() as any;
   expect(s.failures).toBe(0);
 });
 
@@ -120,7 +121,7 @@ test("a new job alerts exactly once, even across overlapping runs", async () => 
 });
 
 test("an hour of healthy one-minute runs writes only a handful of rows", async () => {
-  falckDown = false;
+  fctcDown = false;
   gmrJobs = [
     {
       data: {
@@ -154,7 +155,7 @@ const amrJob = (id: number, city: string, coords: boolean) => ({
 });
 
 test("a board that suddenly returns 0 listings is flagged but keeps checking every minute", async () => {
-  falckDown = false;
+  fctcDown = false;
   gmrJobs = [amrJob(1, "Concord", true)];
   await tick(0);
   gmrJobs = [];
@@ -194,7 +195,7 @@ test("if queueing the alert fails, the job is un-claimed and alerts on the next 
 });
 
 test("a job gone 24h+ that comes back alerts again; gone an hour, it doesn't", async () => {
-  falckDown = false;
+  fctcDown = false;
   gmrJobs = [amrJob(30, "Concord", true)];
   await tick(0);
   const pushesFor30 = () => queued.filter((m) => m.kind === "push" && m.url.endsWith("/30")).length;

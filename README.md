@@ -9,19 +9,23 @@ optional push notification.
 911 employers and fire agencies only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic,
 NorCal, LIFEwest, AlphaOne, West Coast Medical) are deliberately left out.
 
-| Board                           | Covers                                                                                               | How                                                   |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `careers.gmr.net` (iCIMS)       | AMR, CrowdRx, other GMR brands                                                                       | JSON API, filtered by coordinates (60 mi)             |
-| `falcknc.employ.onshift.com`    | Falck Northern California (Alameda 911)                                                              | OnShift JSON API                                      |
-| governmentjobs.com agency pages | Sac City Fire, Sac Metro Fire, San Ramon Valley, Moraga-Orinda, Palo Alto, Folsom, ConFire, Cosumnes | each agency's own board, newest first: the fast path  |
-| governmentjobs.com search       | Any fire district or city within 75 mi (EMT + firefighter trainee/recruit keywords)                  | site-wide search: the wide net, every 5 min           |
-| SmartRecruiters                 | City of SF: SFFD H-3 EMT/Paramedic and H-2 entry-level Firefighter                                   | public JSON API                                       |
-| CalOpps                         | Small agencies (Benicia, Pacifica, San Bruno…)                                                       | EMT and firefighter searches, filtered by place names |
-| FCTC "Now Hiring"               | Departments recruiting off FCTC's Statewide Eligibility List                                         | public page, every 5 min, priority 1                  |
+| Board                                 | Covers                                                                                                                                                                                                                           | How                                                  |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `careers.gmr.net` (iCIMS)             | AMR, CrowdRx, other GMR brands                                                                                                                                                                                                   | JSON API, filtered by coordinates (60 mi)            |
+| governmentjobs.com agency pages       | Every minute: Sac City Fire, Sac Metro Fire, San Ramon Valley, Moraga-Orinda, Palo Alto, Folsom, ConFire, Cosumnes                                                                                                               | each agency's own board, newest first: the fast path |
+| governmentjobs.com city/county boards | Every 5 min: San Jose, Oakland, Stockton, Mountain View, Sac County (Airport Fire), and near Benicia: Benicia, Vallejo, Fairfield, Vacaville, Berkeley, Hayward, Alameda, Richmond, Santa Rosa, Petaluma, Davis, West Sacramento | same, slower: mostly firefighter recruit openings    |
+| governmentjobs.com search             | Any fire district or city within 75 mi (EMT + firefighter trainee/recruit keywords)                                                                                                                                              | site-wide search: the wide net, every 5 min          |
+| SmartRecruiters                       | City of SF: SFFD H-3 EMT/Paramedic and H-2 entry-level Firefighter                                                                                                                                                               | public JSON API                                      |
+| FCTC "Now Hiring"                     | Departments recruiting off FCTC's Statewide Eligibility List                                                                                                                                                                     | public page, every 5 min, priority 1                 |
+| WFCA job postings (`wfca.com/feed`)   | California fire jobs from small districts not on governmentjobs.com                                                                                                                                                              | RSS feed, every 30 min, nearby agencies only         |
 
-Not covered: **King-American** (SF 911). Its Paycom job board only serves listings to a browser
-session, so subscribe with the **Create Job Alerts** button on
-[its board](https://phx.us-west.paycomonline.net/v4/ats/web.php/portal/AD91210A1A43DAB866B5F4021AC8657E/career-page).
+Not covered, so sign up for their own job alerts instead:
+
+- **King-American** (SF 911): its Paycom job board only serves listings to a browser session. Use
+  the **Create Job Alerts** button on
+  [its board](https://phx.us-west.paycomonline.net/v4/ats/web.php/portal/AD91210A1A43DAB866B5F4021AC8657E/career-page).
+- **Falck Northern California** (Alameda 911) and **CalOpps** (small agencies like Benicia,
+  Pacifica, San Bruno): both block requests from Cloudflare (403), and neither has another feed.
 
 Each title is sorted into one of two categories, or skipped (`classifyTitle` in `src/filter.ts`,
 rules in [`src/config.ts`](src/config.ts), checked with `bun test`):
@@ -41,8 +45,9 @@ tags each job.
 
 Postings can close fast (Sac City Fire's single-role EMT closed 14 minutes after opening at 250
 applicants; AMR in about 45), so AMR/GMR, the fire agency pages and SF are checked every minute.
-Falck and CalOpps rate-limit, and the site-wide GovernmentJobs search is only the backup net, so
-those get every 5 minutes (`everyMinutes` in `src/config.ts`). A board that fails backs off from its
+The site-wide GovernmentJobs search is only the backup net, FCTC lists recruitments that stay open
+for days, and the city/county boards mostly carry firefighter recruit openings, so those get every 5
+minutes (the WFCA feed every 30) (`everyMinutes` in `src/config.ts`). A board that fails backs off from its
 own pace (1, 2, 4… min; 5, 10, 20… for 5-minute boards, max 60) and returns to normal after one
 success. D1 is only written when something changes, about 1,600 rows a day against the free tier's
 100k.
@@ -157,9 +162,8 @@ bun run dev         # local worker on :1337 (emails land in .alchemy/local/email
 
 Add an entry to `SOURCES` in `src/config.ts`:
 
-- Another Falck region: `{ kind: "onshift", name: "Falck X", tenant: "<slug>" }`. The slug is the
-  subdomain in its apply links.
-- A specific agency's NEOGOV page is already covered by the governmentjobs.com search.
+- Another fire agency on governmentjobs.com: add its slug (the part after `/careers/` in its job
+  links) to `FIRE_AGENCIES`. The site-wide search covers it too, just more slowly.
 - A board on a new system needs a fetcher in `src/sources.ts`, which returns `Job[]`.
 
 ## Why not SMS?

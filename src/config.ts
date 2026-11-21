@@ -64,12 +64,11 @@ export type SourceConfig = {
   everyMinutes?: number;
 } & (
   | { kind: "gmr"; name: string; brands?: string[] }
-  | { kind: "onshift"; name: string; tenant: string }
   | { kind: "neogov"; name: string; keywords: string[]; distanceMiles: number }
   | { kind: "smartrecruiters"; name: string; company: string; queries: string[] }
-  | { kind: "calopps"; name: string; keywords: string[] }
   | { kind: "neogovAgency"; name: string; agency: string }
   | { kind: "fctc"; name: string }
+  | { kind: "wfca"; name: string }
 );
 
 /**
@@ -77,7 +76,7 @@ export type SourceConfig = {
  * (newest first). The site-wide search can lag behind; Sac City Fire's single-role EMT posting
  * closed 14 minutes after opening. The slug is the part after /careers/ in the agency's job links.
  */
-const FIRE_AGENCIES: Record<string, { name: string; expectNonEmpty?: boolean }> = {
+const FIRE_AGENCIES: Record<string, { name: string; expectNonEmpty?: boolean; everyMinutes?: number }> = {
   // City-wide boards always list something; an empty one means the parser broke.
   saccity: { name: "Sac City Fire", expectNonEmpty: true },
   // The rest can legitimately drop to zero (some list only one or two postings), so no empty check.
@@ -89,19 +88,39 @@ const FIRE_AGENCIES: Record<string, { name: string; expectNonEmpty?: boolean }> 
   // No single-role EMT program, but they hire firefighter recruits/trainees.
   confire: { name: "ConFire" },
   cosumnescsd: { name: "Cosumnes Fire" },
+
+  // City/county boards, checked every 5 min: these mostly matter for firefighter recruit openings
+  // (not urgent), and a slower pace keeps total requests to governmentjobs.com down.
+  // Departments that run their own academies:
+  sanjoseca: { name: "San Jose Fire", everyMinutes: 5 },
+  oaklandca: { name: "Oakland Fire", everyMinutes: 5 },
+  stockton: { name: "Stockton Fire", everyMinutes: 5 },
+  mountainview: { name: "Mountain View Fire", everyMinutes: 5 },
+  sacramento: { name: "Sac County (Airport Fire)", everyMinutes: 5 },
+  // Departments near Benicia (mostly Firefighter/Paramedic, which the filter skips):
+  benicia: { name: "Benicia Fire", everyMinutes: 5 },
+  vallejo: { name: "Vallejo Fire", everyMinutes: 5 },
+  fairfield: { name: "Fairfield Fire", everyMinutes: 5 },
+  vacaville: { name: "Vacaville Fire", everyMinutes: 5 },
+  berkeley: { name: "Berkeley Fire", everyMinutes: 5 },
+  haywardca: { name: "Hayward Fire", everyMinutes: 5 },
+  alamedaca: { name: "Alameda Fire", everyMinutes: 5 },
+  richmondca: { name: "Richmond Fire", everyMinutes: 5 }, // "richmond" is Richmond, VA
+  santarosa: { name: "Santa Rosa Fire", everyMinutes: 5 },
+  petaluma: { name: "Petaluma Fire", everyMinutes: 5 },
+  davis: { name: "Davis Fire", everyMinutes: 5 },
+  westsacramento: { name: "West Sacramento Fire", everyMinutes: 5 },
 };
 
 // 911 employers only. IFT-focused companies (Royal, Falcon, ProTransport-1, Bay Medic, NorCal,
 // LIFEwest, AlphaOne, West Coast Medical) are left out on purpose.
 // King-American (SF 911) has no public feed - its Paycom board needs a session token - so use the
 // "Create Job Alerts" button on its board instead.
+// Falck (OnShift) and CalOpps were removed: both block requests from Cloudflare (403), and neither
+// has another feed to check. Sign up for their own job alerts instead.
 export const SOURCES: SourceConfig[] = [
   // AMR + sister brands - iCIMS JSON API, has coordinates. AMR postings have closed in ~45 min.
   { kind: "gmr", name: "AMR / GMR", expectNonEmpty: true },
-  // Falck Northern California (Alameda County 911). Falck runs a separate OnShift
-  // tenant per region - add more here (find the slug from an apply link).
-  // Occasionally rate-limits (403) - the worker backs off automatically.
-  { kind: "onshift", name: "Falck NorCal", tenant: "falcknc", everyMinutes: 5 },
   // Most Bay Area / Sacramento fire districts & cities post on governmentjobs.com.
   {
     kind: "neogov",
@@ -119,19 +138,20 @@ export const SOURCES: SourceConfig[] = [
     // "Firefighter" catches SFFD's H-2 entry-level class.
     queries: ["EMT", "Firefighter"],
   },
-  // Smaller agencies (Benicia, Moraga-Orinda, Pacifica, San Bruno…) use CalOpps.
-  // Also rate-limits occasionally. One keyword: CalOpps' "EMT" search also matches the spelled-out title.
-  { kind: "calopps", name: "CalOpps", keywords: ["EMT", "firefighter"], everyMinutes: 5 },
-  ...Object.entries(FIRE_AGENCIES).map(([agency, { name, expectNonEmpty }]) => ({
+  ...Object.entries(FIRE_AGENCIES).map(([agency, { name, expectNonEmpty, everyMinutes }]) => ({
     kind: "neogovAgency" as const,
     name,
     agency,
     expectNonEmpty,
+    everyMinutes,
   })),
   // Fire departments recruiting off FCTC's Statewide Eligibility List (you're on it). Mostly
   // "Firefighter Trainee/Recruit" rows; paramedic-only rows are dropped by the filter. Recruitments
   // stay open for days and the agency page / GovernmentJobs usually alert first.
   { kind: "fctc", name: "FCTC", everyMinutes: 5 },
+  // Western Fire Chiefs Association job postings: small CA districts that aren't on governmentjobs.com
+  // (Moraga-Orinda posted its single-role EMT job here). A few CA posts a week, so every 30 min.
+  { kind: "wfca", name: "WFCA", everyMinutes: 30 },
 ];
 
 /**

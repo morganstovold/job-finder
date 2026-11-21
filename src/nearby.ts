@@ -1,4 +1,4 @@
-// For boards that don't give coordinates (CalOpps, OnShift), a job counts as
+// For boards that don't give coordinates (FCTC, SmartRecruiters), a job counts as
 // "nearby" if its agency/location text mentions one of these places.
 // Roughly everything within ~60 miles of Benicia.
 

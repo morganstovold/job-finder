@@ -48,7 +48,7 @@ export async function confirmAnnouncement(env: WorkerEnv, row: AnnouncementRow, 
  * and confirm the announcement. `extra` statements (board status) ride in the same D1 batch.
  */
 export async function claimAndNotify(env: WorkerEnv, jobs: Job[], now: number, extra: D1PreparedStatement[] = []) {
-  // The same posting can show up on two boards (e.g. SFFD on SmartRecruiters + CalOpps) - those have
+  // The same posting can show up on two boards (e.g. an agency page and the GovernmentJobs search) - those have
   // different ids, which is fine: you'd rather hear twice than miss one.
   const matched = jobs.map(categorize).filter((j) => j !== null);
   const unique = [...new Map(matched.map((j) => [j.id, j])).values()];

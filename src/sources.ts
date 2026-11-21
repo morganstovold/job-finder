@@ -79,28 +79,6 @@ async function gmr(src: Extract<SourceConfig, { kind: "gmr" }>): Promise<Job[]> 
   return jobs;
 }
 
-// ── Falck (OnShift Employ) ─────────────────────────────────────────────────
-async function onshift(src: Extract<SourceConfig, { kind: "onshift" }>): Promise<Job[]> {
-  const base = `https://${src.tenant}.employ.onshift.com`;
-  const rows = (await (await get(`${base}/api/v1/external/openings`, { Accept: "application/json" })).json()) as any[];
-  return rows
-    .map((o) => ({
-      id: `onshift:${src.tenant}:${o.id}`,
-      source: src.name,
-      title: o.title,
-      employer: o.company?.company_short ?? src.name,
-      location: o.location?.location_name ?? "",
-      url: `${base}/job_positions/view/${o.id}`,
-      postedAt: o.date_open ? new Date(o.date_open.replace(" ", "T") + "Z").toISOString() : undefined,
-      detail:
-        o.job_position_shifts
-          ?.map((s: any) => s.shift?.name)
-          .filter(Boolean)
-          .join(", ") || undefined,
-    }))
-    .filter((j) => isNearbyText(j.location));
-}
-
 // ── governmentjobs.com (NEOGOV) ────────────────────────────────────────────
 // The search page returns an HTML fragment whose <li> carries data-job-* attrs.
 async function neogov(src: Extract<SourceConfig, { kind: "neogov" }>): Promise<Job[]> {
@@ -167,23 +145,6 @@ async function smartrecruiters(src: Extract<SourceConfig, { kind: "smartrecruite
   return dedupe(jobs); // a posting can match several queries
 }
 
-// ── CalOpps (small CA cities & fire districts) ─────────────────────────────
-async function calopps(src: Extract<SourceConfig, { kind: "calopps" }>): Promise<Job[]> {
-  const jobs: Job[] = [];
-  for (const keyword of src.keywords) {
-    const html = await (await get(`https://www.calopps.org/job-search/${encodeURIComponent(keyword)}`)).text();
-    const re =
-      /<h3 class="media-heading">\s*<a href="(https:\/\/www\.calopps\.org\/([^/]+)\/job-(\d+))">([^<]+)<\/a>[\s\S]*?<div class="meta-info">([^<]+)<\/div>/g;
-    for (const [, url, agencySlug, id, rawTitle, agency] of html.matchAll(re)) {
-      const title = decode(rawTitle).replace(/\s*\(\d+\)\s*$/, "");
-      const employer = decode(agency);
-      if (!isNearbyText(agencySlug.replace(/-/g, " "), employer)) continue;
-      jobs.push({ id: `calopps:${id}`, source: src.name, title, employer, location: "", url });
-    }
-  }
-  return dedupe(jobs);
-}
-
 // ── A single agency's governmentjobs.com page (newest first) ───────────────
 // Faster than the site-wide search, which can lag - matters when a posting closes in 14 minutes.
 async function neogovAgency(src: Extract<SourceConfig, { kind: "neogovAgency" }>): Promise<Job[]> {
@@ -243,21 +204,57 @@ async function fctc(src: Extract<SourceConfig, { kind: "fctc" }>): Promise<Job[]
   return dedupe(jobs);
 }
 
+// ── Western Fire Chiefs Association job postings (WordPress RSS) ──────────
+// The feed mixes news and job posts. Job titles look like
+// "CA – Firefighter/Paramedic – Lane Fire Authority – Closing: 12/02/2026".
+export function parseWfcaFeed(xml: string, sourceName: string): Job[] {
+  const jobs: Job[] = [];
+  for (const [, item] of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+    const field = (tag: string) =>
+      decode(
+        (item.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`))?.[1] ?? "").replace(
+          /^<!\[CDATA\[|\]\]>$/g,
+          "",
+        ),
+      );
+    const parts = field("title").split(/\s+[–—-]\s+/);
+    if (parts[0] !== "CA" || parts.length < 3) continue; // other states, or a news post
+    const [, title, employer, ...rest] = parts;
+    if (!isNearbyText(employer)) continue;
+    const link = field("link");
+    const date = Date.parse(field("pubDate"));
+    jobs.push({
+      id: `wfca:${field("guid") || link}`,
+      source: sourceName,
+      title,
+      employer,
+      location: "",
+      url: link,
+      postedAt: Number.isNaN(date) ? undefined : new Date(date).toISOString(),
+      detail: rest.join(" · ") || undefined,
+    });
+  }
+  return jobs;
+}
+
+async function wfca(src: Extract<SourceConfig, { kind: "wfca" }>): Promise<Job[]> {
+  const xml = await (await get("https://wfca.com/feed/", { Accept: "application/rss+xml, application/xml" })).text();
+  return parseWfcaFeed(xml, src.name);
+}
+
 export const fetchSource = (src: SourceConfig): Promise<Job[]> => {
   switch (src.kind) {
     case "gmr":
       return gmr(src);
-    case "onshift":
-      return onshift(src);
     case "neogov":
       return neogov(src);
     case "smartrecruiters":
       return smartrecruiters(src);
-    case "calopps":
-      return calopps(src);
     case "neogovAgency":
       return neogovAgency(src);
     case "fctc":
       return fctc(src);
+    case "wfca":
+      return wfca(src);
   }
 };
